@@ -16,6 +16,14 @@ func TestRenderPage(t *testing.T) {
 			{Name: "Wi-Fi voiture", OK: false, Detail: `actuel="home-wifi" attendu="test-ssid"`},
 		},
 		WPP: []string{"id=4 len=0"},
+		USB: USBSnapshot{
+			Transport:       "usb",
+			ServiceState:    "active",
+			Mode:            "ask",
+			VendorID:        "0x0e8d",
+			AccessoryLinked: true,
+			Log:             []string{"waiting for Android Auto accessory start"},
+		},
 	}
 	got := renderPage(snap)
 	for _, want := range []string{
@@ -30,6 +38,11 @@ func TestRenderPage(t *testing.T) {
 		"Arrêter",
 		"Redémarrer",
 		"id=4 len=0",
+		"Câble USB",
+		"Service USB : active",
+		"accessoire lié",
+		"Réparer l'USB",
+		"waiting for Android Auto accessory start",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("page is missing %q", want)

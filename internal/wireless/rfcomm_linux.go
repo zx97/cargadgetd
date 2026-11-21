@@ -16,19 +16,15 @@ import (
 // dialRFCOMM opens an RFCOMM stream to addr on channel. The kernel and BlueZ
 // handle the ACL link and bonding; the caller receives a byte stream to the
 // head unit's AA RFCOMM service.
-func dialRFCOMM(addr string, channel uint8) (net.Conn, error) {
+func dialRFCOMM(addr string, channel uint8, logf func(string, ...any)) (net.Conn, error) {
 	bd, err := parseBDAddr(addr)
 	if err != nil {
 		return nil, err
 	}
-	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_STREAM|unix.SOCK_CLOEXEC, unix.BTPROTO_RFCOMM)
-	if err != nil {
-		return nil, fmt.Errorf("rfcomm socket: %w", err)
-	}
-	sa := &unix.SockaddrRFCOMM{Addr: bd, Channel: channel}
 	start := time.Now()
-	if err := unix.Connect(fd, sa); err != nil {
-		unix.Close(fd)
+	fd, err := dialBluetooth(unix.SOCK_STREAM, unix.BTPROTO_RFCOMM,
+		&unix.SockaddrRFCOMM{Addr: bd, Channel: channel}, 3, logf)
+	if err != nil {
 		return nil, fmt.Errorf("rfcomm connect %s channel %d after %s: %w", addr, channel, sinceText(start), err)
 	}
 	f := os.NewFile(uintptr(fd), "rfcomm")

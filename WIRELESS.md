@@ -165,6 +165,28 @@ has to read the check list. The daemon never gives up: after a failed attempt it
 watches the Bluetooth link, the ConnMan state and the association, and starts a
 new cycle as soon as one of them changes (or after 15 s at most).
 
+### Wired path monitoring
+
+The page also observes the USB daemon, which it does not own:
+
+| Line | Source |
+| --- | --- |
+| Service USB | `systemctl is-active cargadgetd-aoa.service` |
+| Mode | live gadget `idVendor` (`0x0e8d` ask, `0x18d1` accessory) |
+| Session USB | a `cargadgetd-md` process without `-wireless` |
+| Log | tail of `~/cargadgetd.log` |
+
+The state that looks like "the car refuses the phone" is the launcher unit
+stopped: with `daemon.transport: usb` the waiter must run *before* the cable is
+plugged, otherwise the phone enumerates as plain mass storage. The
+**Réparer l'USB** button runs `cargadgetd-gadget -aoa-service start` (setuid) and
+the page then follows the unit, so no shell is needed.
+
+Configfs gadget directories are `0771 root:system`: `filepath.Glob` cannot be
+used there (Go opens every intermediate directory), only `ReadDir` on the parent
+plus a direct `ReadFile` of `idVendor`.
+
+
 
 Logs: `~/wireless.log` (wireless daemon) and `~/cargadgetd.log` (USB daemon).
 The status page lists the failing check and the raw WPP exchange. It polls

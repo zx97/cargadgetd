@@ -217,7 +217,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		return handshake(ctx, rc, opt, st, guess)
 	}
 	t = time.Now()
-	rc, err := dialRFCOMM(dev.Address, channel)
+	rc, err := dialRFCOMM(dev.Address, channel, opt.logf)
 	if err != nil {
 		human := humanBluetoothError(err)
 		opt.logf("rfcomm: connect %s channel %d failed after %s: %v", dev.Address, channel, sinceText(t), err)

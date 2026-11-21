@@ -31,6 +31,9 @@ type Snapshot struct {
 	// mode; they differ by design and the page says so.
 	BluetoothName string
 	USBName       string
+	// USB is the wired path: its systemd unit, gadget mode, live session and
+	// log tail. Observed, not owned, by the wireless daemon.
+	USB USBSnapshot
 }
 
 // Status is the live state of the wireless bootstrap. All methods are safe on a
@@ -198,7 +201,6 @@ func (s *Status) Snapshot() Snapshot {
 		return Snapshot{}
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	snap := Snapshot{
 		Phase:         s.phase,
 		Running:       s.running,
@@ -215,6 +217,11 @@ func (s *Status) Snapshot() Snapshot {
 		snap.Checks = append(snap.Checks, *s.checks[name])
 	}
 	snap.WPP = append(snap.WPP, s.wpp...)
+	s.mu.Unlock()
+
+	// Sampling the USB unit forks systemctl and reads /proc: do it outside the
+	// lock, and never let it delay the wireless state.
+	snap.USB = USBStatus()
 	snap.Next, snap.NextKind = nextStep(snap)
 	return snap
 }
@@ -233,6 +240,11 @@ func nextStep(s Snapshot) (string, string) {
 	name := s.BluetoothName
 	if name == "" {
 		name = "le téléphone"
+	}
+	// Wired mode: the launcher unit is the first thing that can be wrong, and
+	// it is the failure that looks like "the car refuses the phone".
+	if s.USB.Transport == "usb" && s.USB.ServiceState != "active" {
+		return "Le service USB est arrêté : touche « Réparer l'USB », puis rebranche le câble.", "action"
 	}
 	switch {
 	case !s.Running && s.Error == "":

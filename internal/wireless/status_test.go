@@ -52,6 +52,12 @@ func TestNextStepTellsWhatToDo(t *testing.T) {
 			want: "Tu peux rouler",
 			kind: "ok",
 		},
+		{
+			name: "usb launcher stopped",
+			snap: Snapshot{USB: USBSnapshot{Transport: "usb", ServiceState: "inactive"}},
+			want: "Réparer l'USB",
+			kind: "action",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

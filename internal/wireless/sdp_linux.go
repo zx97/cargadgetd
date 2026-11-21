@@ -26,13 +26,10 @@ func sdpRFCOMMChannel(addr string, logf func(string, ...any)) (uint8, error) {
 	if err != nil {
 		return 0, err
 	}
-	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, unix.BTPROTO_L2CAP)
-	if err != nil {
-		return 0, fmt.Errorf("sdp l2cap socket: %w", err)
-	}
 	start := time.Now()
-	if err := unix.Connect(fd, &unix.SockaddrL2{PSM: sdpPSM, Addr: bd}); err != nil {
-		unix.Close(fd)
+	fd, err := dialBluetooth(unix.SOCK_SEQPACKET, unix.BTPROTO_L2CAP,
+		&unix.SockaddrL2{PSM: sdpPSM, Addr: bd}, 3, logf)
+	if err != nil {
 		return 0, fmt.Errorf("sdp l2cap connect %s psm %d after %s: %w", addr, sdpPSM, sinceText(start), err)
 	}
 	if logf != nil {

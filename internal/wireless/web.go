@@ -50,6 +50,20 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 		fmt.Fprint(w, `<meta http-equiv="refresh" content="2;url=/"><p>Redémarrage…</p>`)
 	})
 
+	mux.HandleFunc("/usb-fix", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		if err := RepairUSB(); err != nil {
+			s.Set("USB réparation", false, err.Error())
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		s.Set("USB réparation", true, "service USB relancé")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	mux.HandleFunc("/wifi", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && joinWiFi != nil {
 			if err := joinWiFi(); err != nil {
@@ -62,6 +76,37 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 	})
 
 	return mux
+}
+
+// usbText renders the wired-path snapshot as three one-line facts, each with
+// the dot class the page uses.
+func usbText(u USBSnapshot) (svc, mode, sess, svcCls, modeCls, sessCls string) {
+	svc = "Service USB : " + u.ServiceState
+	svcCls = "ko"
+	if u.ServiceState == "active" {
+		svcCls = "ok"
+	}
+	switch u.Mode {
+	case "accessory":
+		mode = fmt.Sprintf("Mode : accessoire AOA (%s) — la voiture peut parler", u.VendorID)
+		modeCls = "ok"
+	case "ask":
+		mode = fmt.Sprintf("Mode : attente du câble (%s)", u.VendorID)
+		modeCls = "idle"
+	default:
+		mode = "Mode : gadget USB absent"
+		modeCls = "ko"
+	}
+	if u.AccessoryLinked {
+		mode += " · accessoire lié"
+	}
+	sess = "Session USB : aucune"
+	sessCls = "idle"
+	if u.SessionRunning {
+		sess = "Session USB : en cours"
+		sessCls = "ok"
+	}
+	return svc, mode, sess, svcCls, modeCls, sessCls
 }
 
 func bannerFor(s Snapshot) (string, string) {
@@ -107,6 +152,10 @@ td{padding:7px 6px;border-bottom:1px solid #2a2f3a;vertical-align:top}
 .next.action{background:#122534;border-color:#3498db}
 .names{margin:0 0 12px;padding:10px;border-radius:8px;background:#0f1620;border:1px solid #2a2f3a;font-size:.9rem}
 .names b{font-weight:700}
+details.usb{margin:0 0 12px;padding:10px;border-radius:8px;background:#0f1620;border:1px solid #2a2f3a}
+details.usb summary{cursor:pointer;font-weight:700;margin-bottom:8px}
+details.usb .row{margin:4px 0;font-size:.92rem}
+details.usb button{margin:8px 0;padding:10px;font-size:.95rem;border-radius:8px;border:0;color:#fff;background:#3498db;width:100%}
 .btns{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap}
 button{flex:1;padding:14px;font-size:1rem;border-radius:10px;border:0;color:#fff}
 .start{background:#2ecc71}.stop{background:#e74c3c}.wifi{background:#3498db}.restart{background:#8e44ad}
@@ -188,7 +237,31 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 		b.WriteString(`<pre id="wpp" style="display:none"></pre>`)
 	}
 
+	// Wired path: observed from the outside. The launcher being stopped is the
+	// state that looks like "the car refuses the phone", so it is visible here
+	// with a one-tap repair.
+	svc, mode, sess, svcCls, modeCls, sessCls := usbText(snap.USB)
+	b.WriteString(`<details class="usb" open><summary>Câble USB</summary>`)
+	fmt.Fprintf(&b, `<div class="row"><span class="dot %s" id="usbSvcDot"></span><span id="usbSvc">%s</span></div>`,
+		svcCls, html.EscapeString(svc))
+	fmt.Fprintf(&b, `<div class="row"><span class="dot %s" id="usbModeDot"></span><span id="usbMode">%s</span></div>`,
+		modeCls, html.EscapeString(mode))
+	fmt.Fprintf(&b, `<div class="row"><span class="dot %s" id="usbSessDot"></span><span id="usbSess">%s</span></div>`,
+		sessCls, html.EscapeString(sess))
+	if snap.USB.Transport != "usb" {
+		fmt.Fprintf(&b, `<div class="row detail">Transport configuré : %s (le câble est ignoré).</div>`,
+			html.EscapeString(snap.USB.Transport))
+	}
+	b.WriteString(`<button id="usbFix" type="button">Réparer l'USB</button>`)
+	b.WriteString(`<pre id="usbLog" style="margin-top:6px">`)
+	for _, line := range snap.USB.Log {
+		b.WriteString(html.EscapeString(line))
+		b.WriteByte('\n')
+	}
+	b.WriteString(`</pre></details>`)
+
 	b.WriteString(pageScript)
+	b.WriteString(wireUSBFix)
 	b.WriteString("</body></html>")
 	return b.String()
 }
@@ -250,7 +323,35 @@ async function tick(){
     if(s.WPP && s.WPP.length){ w.textContent=s.WPP.join('\n'); w.style.display=''; }
     else { w.style.display='none'; }
   }
+  const u=s.USB||{};
+  const setRow=(dotId,textId,cls,text)=>{const d=$(dotId); if(d) d.className='dot '+cls; const t=$(textId); if(t) t.textContent=text;};
+  const svcText='Service USB : '+(u.ServiceState||'inconnu');
+  const svcCls=u.ServiceState==='active'?'ok':'ko';
+  let modeText='Mode : gadget USB absent', modeCls='ko';
+  if(u.Mode==='accessory'){ modeText='Mode : accessoire AOA ('+(u.VendorID||'')+') — la voiture peut parler'; modeCls='ok'; }
+  else if(u.Mode==='ask'){ modeText='Mode : attente du câble ('+(u.VendorID||'')+')'; modeCls='idle'; }
+  if(u.AccessoryLinked) modeText+=' · accessoire lié';
+  const sessText=u.SessionRunning?'Session USB : en cours':'Session USB : aucune';
+  setRow('usbSvcDot','usbSvc',svcCls,svcText);
+  setRow('usbModeDot','usbMode',modeCls,modeText);
+  setRow('usbSessDot','usbSess',u.SessionRunning?'ok':'idle',sessText);
+  const ul=$('usbLog');
+  if(ul){ ul.textContent=(u.Log||[]).join('\n'); }
 }
 tick();
 setInterval(tick, 1000);
+</script>`
+
+// wireUSBFix makes the repair button a background POST: the page then updates
+// from the next /status poll instead of reloading.
+const wireUSBFix = `<script>
+(function(){
+  const b=document.getElementById('usbFix');
+  if(!b) return;
+  b.addEventListener('click', async function(){
+    b.disabled=true; const old=b.textContent; b.textContent='Réparation…';
+    try { await fetch('/usb-fix',{method:'POST'}); } catch(e) {}
+    setTimeout(()=>{ b.disabled=false; b.textContent=old; }, 1500);
+  });
+})();
 </script>`
