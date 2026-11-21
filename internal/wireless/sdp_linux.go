@@ -42,7 +42,11 @@ func sdpRFCOMMChannel(addr string, logf func(string, ...any)) (uint8, error) {
 	defer f.Close()
 	_ = f.SetDeadline(time.Now().Add(5 * time.Second))
 
-	if _, err := f.Write(sdpAARequest()); err != nil {
+	req := sdpAARequest()
+	if logf != nil {
+		logf("sdp: request %d bytes: %x", len(req), req)
+	}
+	if _, err := f.Write(req); err != nil {
 		return 0, fmt.Errorf("sdp write: %w", err)
 	}
 	buf := make([]byte, 4096)

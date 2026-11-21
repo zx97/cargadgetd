@@ -41,6 +41,18 @@ cargadgetd-md -wireless \
 
 The daemon serves a status page on `http://127.0.0.1:9288/` (`-wireless-web`).
 
+## First pairing
+
+The first wireless setup normally needs one **USB** session: plug the phone,
+let the car run wired Android Auto once (the head unit registers the phone and
+its wireless trust), then unplug. Without that step many head units do not list
+the phone over Bluetooth, or cannot complete the WPP handshake. The daemon
+powers the Bluetooth adapter and makes it discoverable, but it cannot perform
+the car's first-time trust step.
+
+The status page shows the adapter state (Powered / Discoverable / Pairable) and
+the device properties (Bonded / Trusted / ServicesResolved).
+
 ## Status page
 
 The page shows one green/red line per prerequisite:
@@ -55,7 +67,12 @@ The page shows one green/red line per prerequisite:
 
 Buttons: **Démarrer** / **Arrêter** control the connection attempt; the
 **Rejoindre le Wi-Fi** button asks ConnMan to join the SSID received from the
-car. The daemon keeps running so the page stays available.
+car; **Redémarrer** re-execs the daemon from the installed binary (reloads an
+updated build and resets the controller) without a shell. The daemon keeps
+running so the page stays available.
+
+Logs: `~/wireless.log` (wireless daemon) and `~/cargadgetd.log` (USB daemon).
+The status page lists the failing check and the raw WPP exchange.
 
 ## Wi-Fi selection
 

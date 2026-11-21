@@ -9,7 +9,7 @@ import (
 )
 
 // Handler serves the wireless status page and its start/stop controls.
-func (s *Status) Handler(start, stop func(), joinWiFi func() error) http.Handler {
+func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func()) http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -42,6 +42,14 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error) http.Handler
 		http.Redirect(w, r, "/", http.StatusSeeOther)
 	})
 
+	mux.HandleFunc("/restart", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && restart != nil {
+			restart()
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprint(w, `<meta http-equiv="refresh" content="2;url=/"><p>Redémarrage…</p>`)
+	})
+
 	mux.HandleFunc("/wifi", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost && joinWiFi != nil {
 			if err := joinWiFi(); err != nil {
@@ -70,15 +78,28 @@ table{width:100%;border-collapse:collapse;margin-bottom:12px}
 td{padding:7px 6px;border-bottom:1px solid #2a2f3a;vertical-align:top}
 .dot{display:inline-block;width:14px;height:14px;border-radius:50%;margin-right:8px;vertical-align:middle}
 .ok{background:#2ecc71}.ko{background:#e74c3c}.idle{background:#7f8c8d}
+.banner{font-size:1.5rem;font-weight:700;padding:18px;border-radius:12px;margin-bottom:12px;text-align:center}
+.wait{background:#f39c12}
 .name{font-weight:600}
 .detail{color:#9aa3b2;font-size:.85rem}
 .err{background:#4a1d1d;border:1px solid #e74c3c;padding:9px;border-radius:8px;margin-bottom:12px;word-break:break-word}
-.btns{display:flex;gap:10px;margin:12px 0}
+.btns{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap}
 button{flex:1;padding:14px;font-size:1rem;border-radius:10px;border:0;color:#fff}
-.start{background:#2ecc71}.stop{background:#e74c3c}.wifi{background:#3498db}
+.start{background:#2ecc71}.stop{background:#e74c3c}.wifi{background:#3498db}.restart{background:#8e44ad}
 pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;overflow:auto;font-size:.78rem;white-space:pre-wrap;word-break:break-word}
 </style></head><body>`)
 	b.WriteString("<h1>Cargadgetd Wireless</h1>")
+
+	banner, cls := "Arrêté", "idle"
+	switch {
+	case snap.Error != "" && !snap.Running:
+		banner, cls = "Erreur", "ko"
+	case snap.Running && snap.Phase == "session":
+		banner, cls = "Android Auto connecté", "ok"
+	case snap.Running:
+		banner, cls = "Connexion…", "wait"
+	}
+	fmt.Fprintf(&b, `<div class="banner %s">%s</div>`, cls, html.EscapeString(banner))
 
 	state := "arrêté"
 	if snap.Running {
@@ -112,6 +133,7 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 	b.WriteString(`<div class="btns">
 <form method="post" action="/start" style="flex:1"><button class="start" type="submit">Démarrer</button></form>
 <form method="post" action="/stop" style="flex:1"><button class="stop" type="submit">Arrêter</button></form>
+<form method="post" action="/restart" style="flex:1"><button class="restart" type="submit">Redémarrer</button></form>
 </div>`)
 	if snap.WiFiWant != "" {
 		fmt.Fprintf(&b, `<form method="post" action="/wifi"><button class="wifi" type="submit" style="width:100%%">Rejoindre le Wi-Fi %s</button></form>`, html.EscapeString(snap.WiFiWant))

@@ -105,6 +105,7 @@ func (c *Controller) finish() {
 		cancel()
 	}
 	c.Status.Running(false)
+	c.Status.Set("Session AA", false, "terminée")
 }
 
 // Start requests a connection attempt. It is a no-op while already running.

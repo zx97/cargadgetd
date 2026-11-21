@@ -43,23 +43,23 @@ func TestParseStartEndpointLayoutB(t *testing.T) {
 }
 
 func TestParseInfoResponseLayoutA(t *testing.T) {
-	p := pbAppendString(nil, 2, "multivan")
+	p := pbAppendString(nil, 2, "test-ssid")
 	p = pbAppendString(p, 3, "AA:BB:CC:DD:EE:FF")
 	p = pbAppendString(p, 4, "secret")
 	p = pbAppendVarint(p, 5, 8)
 	ssid, key, bssid, sec := parseInfoResponse(p)
-	if ssid != "multivan" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 8 {
+	if ssid != "test-ssid" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 8 {
 		t.Fatalf("%q %q %q %d", ssid, key, bssid, sec)
 	}
 }
 
 func TestParseInfoResponseLayoutB(t *testing.T) {
-	p := pbAppendString(nil, 1, "multivan")
+	p := pbAppendString(nil, 1, "test-ssid")
 	p = pbAppendString(p, 2, "AA:BB:CC:DD:EE:FF")
 	p = pbAppendString(p, 3, "secret")
 	p = pbAppendVarint(p, 4, 12)
 	ssid, key, bssid, sec := parseInfoResponse(p)
-	if ssid != "multivan" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 12 {
+	if ssid != "test-ssid" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 12 {
 		t.Fatalf("%q %q %q %d", ssid, key, bssid, sec)
 	}
 }
@@ -69,7 +69,7 @@ func TestParseSetupInfo(t *testing.T) {
 	ep = pbAppendString(ep, 1, "10.0.0.1")
 	ep = pbAppendVarint(ep, 2, 5288)
 	var ap []byte
-	ap = pbAppendString(ap, 2, "multivan")
+	ap = pbAppendString(ap, 2, "test-ssid")
 	ap = pbAppendString(ap, 3, "AA:BB:CC:DD:EE:FF")
 	ap = pbAppendString(ap, 4, "secret")
 	ap = pbAppendVarint(ap, 5, 8)
@@ -81,18 +81,18 @@ func TestParseSetupInfo(t *testing.T) {
 	if ip != "10.0.0.1" || port != 5288 {
 		t.Fatalf("endpoint %s:%d", ip, port)
 	}
-	if ssid != "multivan" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 8 {
+	if ssid != "test-ssid" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 8 {
 		t.Fatalf("ap %q %q %q %d", ssid, key, bssid, sec)
 	}
 }
 
 func TestParseVersionSSID(t *testing.T) {
 	var group []byte
-	group = pbAppendString(group, 2, "multivan")
+	group = pbAppendString(group, 2, "test-ssid")
 	var p []byte
 	p = pbAppendVarint(p, 2, 1)
 	p = pbAppendBytes(p, 7, group)
-	if got := parseVersionSSID(p); got != "multivan" {
+	if got := parseVersionSSID(p); got != "test-ssid" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -127,8 +127,8 @@ func TestStatusSnapshot(t *testing.T) {
 	st := NewStatus()
 	st.Phase("wifi")
 	st.Set("Wi-Fi", false, "soho2016")
-	st.Set("Wi-Fi", true, "multivan")
-	st.SetWiFiWant("multivan")
+	st.Set("Wi-Fi", true, "test-ssid")
+	st.SetWiFiWant("test-ssid")
 	st.WPP("id=1")
 	st.Error(errors.New("boom"))
 
@@ -142,7 +142,7 @@ func TestStatusSnapshot(t *testing.T) {
 	if len(snap.Checks) != 1 || snap.Checks[0].Name != "Wi-Fi" || !snap.Checks[0].OK {
 		t.Fatalf("checks=%+v", snap.Checks)
 	}
-	if snap.Error != "boom" || snap.WiFiWant != "multivan" || len(snap.WPP) != 1 {
+	if snap.Error != "boom" || snap.WiFiWant != "test-ssid" || len(snap.WPP) != 1 {
 		t.Fatalf("snapshot=%+v", snap)
 	}
 

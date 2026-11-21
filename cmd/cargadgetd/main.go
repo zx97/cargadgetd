@@ -169,9 +169,17 @@ func main() {
 		})
 		go ctl.Run(context.Background())
 		addr := fmt.Sprintf("127.0.0.1:%d", *wirelessWeb)
+		restartFn := func() {
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				if err := wireless.RestartProcess(); err != nil {
+					log.Printf("wireless restart: %v", err)
+				}
+			}()
+		}
 		go func() {
 			log.Printf("wireless status: http://%s/", addr)
-			if err := http.ListenAndServe(addr, st.Handler(ctl.Start, ctl.Stop, ctl.JoinWiFi)); err != nil {
+			if err := http.ListenAndServe(addr, st.Handler(ctl.Start, ctl.Stop, ctl.JoinWiFi, restartFn)); err != nil {
 				log.Printf("wireless status http: %v", err)
 			}
 		}()

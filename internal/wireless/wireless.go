@@ -61,7 +61,17 @@ func Dial(ctx context.Context, opt Options) (net.Conn, error) {
 		return nil, err
 	}
 	st.Set("Bluetooth appairé", true, fmt.Sprintf("%s %s", dev.Name, dev.Address))
-	opt.logf("bluetooth: %s %s paired=%v uuids=%v", dev.Name, dev.Address, dev.Paired, dev.UUIDs)
+	opt.logf("bluetooth: %s addr=%s paired=%v bonded=%v trusted=%v connected=%v services_resolved=%v adapter=%s uuids=%v",
+		dev.Name, dev.Address, dev.Paired, dev.Bonded, dev.Trusted, dev.Connected, dev.ServicesResolved, dev.Adapter, dev.UUIDs)
+	dev.EnsureAdapter(opt.logf)
+	logWiFi(opt.Interface, opt.logf)
+	if services, err := connmanWiFiServices(); err != nil {
+		opt.logf("wifi: connman: %v", err)
+	} else {
+		for _, s := range services {
+			opt.logf("wifi: connman %q state=%s", s.Name, s.State)
+		}
+	}
 	if err := dev.Connect(); err != nil {
 		opt.logf("bluetooth: connect %s: %v", dev.Address, err)
 		st.Set("Lien Bluetooth", false, err.Error())

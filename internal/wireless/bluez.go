@@ -22,12 +22,16 @@ const (
 
 // Device is a device known to BlueZ.
 type Device struct {
-	Path    dbus.ObjectPath
-	Address string
-	Name    string
-	Paired  bool
-	Trusted bool
-	UUIDs   []string
+	Path             dbus.ObjectPath
+	Adapter          dbus.ObjectPath
+	Address          string
+	Name             string
+	Paired           bool
+	Bonded           bool
+	Trusted          bool
+	Connected        bool
+	ServicesResolved bool
+	UUIDs            []string
 }
 
 // FindDevice returns the paired device matching address (exact) or name
@@ -56,7 +60,13 @@ func FindDevice(name, address string) (*Device, error) {
 			d.Name = variantString(props["Alias"])
 		}
 		d.Paired = variantBool(props["Paired"])
+		d.Bonded = variantBool(props["Bonded"])
 		d.Trusted = variantBool(props["Trusted"])
+		d.Connected = variantBool(props["Connected"])
+		d.ServicesResolved = variantBool(props["ServicesResolved"])
+		if v, ok := props["Adapter"]; ok {
+			d.Adapter, _ = v.Value().(dbus.ObjectPath)
+		}
 		if v, ok := props["UUIDs"]; ok {
 			if uuids, ok := v.Value().([]string); ok {
 				d.UUIDs = uuids
@@ -130,6 +140,48 @@ func (d *Device) Connect() error {
 		return fmt.Errorf("system bus: %w", err)
 	}
 	return conn.Object(bluezService, d.Path).Call("org.bluez.Device1.Connect", 0).Err
+}
+
+// EnsureAdapter powers the Bluetooth adapter and makes it discoverable so the
+// head unit can find the phone for the first wireless pairing.
+func (d *Device) EnsureAdapter(logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		logf("bluetooth: adapter: %v", err)
+		return
+	}
+	if d.Adapter == "" {
+		logf("bluetooth: adapter path unknown")
+		return
+	}
+	set := func(prop string, v any) {
+		err := conn.Object(bluezService, d.Adapter).
+			Call("org.freedesktop.DBus.Properties.Set", 0,
+				"org.bluez.Adapter1", prop, dbus.MakeVariant(v)).Err
+		if err != nil {
+			logf("bluetooth: adapter %s=%v: %v", prop, v, err)
+			return
+		}
+		logf("bluetooth: adapter %s=%v", prop, v)
+	}
+	set("Powered", true)
+	set("Pairable", true)
+	set("Discoverable", true)
+
+	var props map[string]dbus.Variant
+	if err := conn.Object(bluezService, d.Adapter).
+		Call("org.freedesktop.DBus.Properties.GetAll", 0, "org.bluez.Adapter1").
+		Store(&props); err == nil {
+		logf("bluetooth: adapter address=%s powered=%v discoverable=%v pairable=%v discovering=%v",
+			variantString(props["Address"]),
+			variantBool(props["Powered"]),
+			variantBool(props["Discoverable"]),
+			variantBool(props["Pairable"]),
+			variantBool(props["Discovering"]))
+	}
 }
 
 // WaitConnected polls Device1.Connected until the ACL link is up.

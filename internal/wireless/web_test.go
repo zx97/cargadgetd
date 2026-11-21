@@ -9,11 +9,11 @@ func TestRenderPage(t *testing.T) {
 	snap := Snapshot{
 		Phase:    "wifi",
 		Running:  true,
-		WiFiWant: "multivan",
+		WiFiWant: "test-ssid",
 		Error:    "handshake failed",
 		Checks: []Check{
-			{Name: "Bluetooth appairé", OK: true, Detail: "MULTIVAN 10:32:2C:50:5D:5E"},
-			{Name: "Wi-Fi voiture", OK: false, Detail: `actuel="soho2016" attendu="multivan"`},
+			{Name: "Bluetooth appairé", OK: true, Detail: "TESTCAR 10:32:2C:50:5D:5E"},
+			{Name: "Wi-Fi voiture", OK: false, Detail: `actuel="home-wifi" attendu="test-ssid"`},
 		},
 		WPP: []string{"id=4 len=0"},
 	}
@@ -21,13 +21,14 @@ func TestRenderPage(t *testing.T) {
 	for _, want := range []string{
 		"Cargadgetd Wireless",
 		"Bluetooth appairé",
-		"MULTIVAN",
+		"TESTCAR",
 		"Wi-Fi voiture",
-		`actuel=&#34;soho2016&#34;`,
+		`actuel=&#34;home-wifi&#34;`,
 		"handshake failed",
-		"Rejoindre le Wi-Fi multivan",
+		"Rejoindre le Wi-Fi test-ssid",
 		"Démarrer",
 		"Arrêter",
+		"Redémarrer",
 		"id=4 len=0",
 	} {
 		if !strings.Contains(got, want) {

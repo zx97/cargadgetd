@@ -44,6 +44,14 @@ func wifiIPv4(iface string) string {
 	return ""
 }
 
+// logWiFi logs the current association and IPv4 address.
+func logWiFi(iface string, logf func(string, ...any)) {
+	if logf == nil {
+		return
+	}
+	logf("wifi: %s current ssid=%q ip=%q", iface, wifiSSID(iface), wifiIPv4(iface))
+}
+
 // waitWifi blocks until iface is associated with want and has an IPv4 address.
 // The phone keeps the car's AP as a saved network, so ConnMan normally joins it
 // when the head unit brings the AP up.
