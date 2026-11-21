@@ -205,9 +205,16 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 			time.Sleep(2 * time.Second)
 		}
 		if channel == 0 {
-			channel = 8
-			st.Set("SDP canal AA", false, "canal non trouvé, essai canal 8")
-			opt.logf("sdp: no channel found; falling back to RFCOMM 8")
+			// SDP was refused (usually the baseband link is not fully up yet).
+			// Do not guess: ask the head unit itself which channel speaks WPP.
+			st.Set("SDP canal AA", false, "canal SDP indisponible, sonde des canaux")
+			ch, perr := probeAAChannel(ctx, dev.Address, opt.logf)
+			if perr != nil {
+				st.Set("SDP canal AA", false, perr.Error())
+				return nil, perr
+			}
+			channel = ch
+			st.Set("SDP canal AA", true, fmt.Sprintf("canal %d (sonde WPP)", ch))
 		}
 	} else {
 		st.Set("SDP canal AA", true, fmt.Sprintf("canal forcé %d", channel))

@@ -215,6 +215,25 @@ fails with `no WifiInfoResponse after 2 retries`.
 OOB=1, NUMERIC_COMPARISON=2, PASSKEY_ENTRY=3, PIN=4, and stock Android picks
 NUMERIC_COMPARISON then PIN (never OOB).
 
+### The RFCOMM channel is 7 on a VW MIB3
+
+The phone's BlueZ SDP cache (`/var/lib/bluetooth/<adapter>/cache/<car>`) contains
+the head unit's records in clear text. Decoding a VW MIB3:
+
+```
+0x0001000A  ServiceClassIDList = 4DE17A00-52CB-11E6-BDF4-0800200C9A66   ← Android Auto
+            ProtocolDescriptorList = L2CAP + RFCOMM channel 7
+            ServiceName = "VW SPP Service"
+
+0x0001000B  UUID 00001101 (generic SPP) — RFCOMM channel 8
+```
+
+Channel 8, the old hard-coded fallback, is the car's **generic SPP** service: it
+accepts the connection and then ignores WPP, which looked like "the car never
+answers". When SDP fails (the unit refuses the L2CAP PSD 1 connect while its
+baseband link is not fully up), the daemon now probes the likely channels by
+connecting and sending a `WifiInfoRequest`, and keeps the one that answers.
+
 ## Reading the log
 Every attempt is bounded and self-documenting: timestamps carry milliseconds and
 each phase logs its duration, so one attempt can be read top to bottom without a
