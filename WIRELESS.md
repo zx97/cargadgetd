@@ -69,6 +69,27 @@ Two sources, in order:
    Direct group name in `WifiVersionRequest`) are authoritative and override the
    heuristic.
 
+## Optional car apps
+
+The ftuna aarch64 repository ships two app plugins:
+
+| Package | Purpose |
+|---|---|
+| `cargadgetd-plugin-link` | Mirrors the phone screen to the car (Waze/Google Maps), plus two setuid helpers |
+| `cargadgetd-plugin-maps` | MapLibre map app for the car shell |
+
+```sh
+devel-su rpm -Uvh cargadgetd-plugin-link-*.rpm cargadgetd-plugin-maps-*.rpm
+```
+
+The plugins are `.so` files in `/usr/lib/cargadgetd/plugins/`; the shell loads
+them on the next session and lists them in the app grid.
+
+AppSupport, microG and Aurora Store are already installed on a stock Jolla
+Phone 2026. Install Waze (and Google Maps if your AppSupport has the Play
+Services it needs) from Aurora Store, open the app on the phone, then open
+**Link** in the cargadgetd shell.
+
 ## Waze / Google Maps
 
 cargadgetd does **not** project Android apps: it streams its own Sailfish shell
