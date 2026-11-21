@@ -66,6 +66,15 @@ const (
 	ChanAudio  = 4
 )
 
+// Bluetooth channel (service 10) message ids. The MD opens the channel and
+// announces its Bluetooth address so the head unit can associate this session
+// with the phone's Bluetooth bond: that association is what makes a car offer
+// Wireless Android Auto after the first wired session.
+const (
+	MsgBluetoothPairingRequest  = 0x8001
+	MsgBluetoothPairingResponse = 0x8002
+)
+
 // MaxUSBAudioInFlight is how many unacked PCM messages USB may have in flight.
 // Video stays at 1. Audio needs 2: DHU MediaAck often lands in ~70–80ms, and
 // waiting for that ack before the next 42ms tick stretched playback to ~0.5×.
@@ -89,6 +98,11 @@ type MD struct {
 	InputCh      uint8
 	AudioCh      uint8
 	SensorCh     uint8
+	BluetoothCh  uint8
+	btMethods    []uint32
+	btAnnounced  atomic.Bool
+	localBTAddr  string
+	localBTName  string
 	videoW       int
 	videoH       int
 	videoMW      int // total margin_width (both sides)
@@ -193,6 +207,16 @@ func NewMD(rw io.ReadWriter, ssl *aassl.Session, logger *log.Logger) *MD {
 // SetUSBBulk enables USB FunctionFS-oriented media framing (TLS-safe chunk size).
 func (m *MD) SetUSBBulk(v bool) {
 	m.usbBulk = v
+}
+
+// SetLocalBluetooth records the phone's Bluetooth address and name. They are
+// sent to the head unit on the Bluetooth channel (service 10) so it can tie
+// this USB/Wi-Fi session to the phone's Bluetooth bond — the link a car uses
+// before it offers Wireless Android Auto.
+func (m *MD) SetLocalBluetooth(addr, name string) {
+	m.mu.Lock()
+	m.localBTAddr, m.localBTName = addr, name
+	m.mu.Unlock()
 }
 
 // Run drives the MD side until the connection fails.
@@ -745,6 +769,10 @@ func (m *MD) handle(channel uint8, flags uint8, payload []byte) error {
 			close(m.ready)
 		}
 		m.emit(Event{Type: "sdr", Payload: append([]byte{}, body...)})
+		// Open the Bluetooth channel and announce our address. Must not run on
+		// the reader goroutine: openChannel waits for ChannelOpenResponse,
+		// which only the reader can deliver.
+		go m.sendBluetoothPairing()
 		return nil
 
 	case MsgPingRequest:
@@ -804,6 +832,14 @@ func (m *MD) handleChannel(channel uint8, flags uint8, msgType uint16, body, ful
 	}
 
 	switch channel {
+	case m.BluetoothCh:
+		if msgType == MsgBluetoothPairingResponse {
+			already, status := parseBluetoothPairingResponse(body)
+			m.log.Printf("bluetooth: pairing response already_paired=%v status=%d (0 none, 1 ok, 2 fail)", already, status)
+			m.emit(Event{Type: "bluetooth_pairing", Channel: channel, Payload: append([]byte{}, full...)})
+			return nil
+		}
+		return m.unhandled("bluetooth", channel, msgType, body)
 	case m.InputCh:
 		switch msgType {
 		case InputEvent:
@@ -1089,6 +1125,14 @@ func (m *MD) parseSDR(body []byte) {
 				m.log.Printf("SDR input channel=%d touch=unset buttons=%v blob=%x", id, btns, msg)
 			}
 			m.capturef("SDR", "input ch=%d touch=%dx%d buttons=%v blob=%x", id, w, h, btns, msg)
+		case "bt":
+			addr, methods := parseBluetoothChannel(msg)
+			m.mu.Lock()
+			m.BluetoothCh = uint8(id)
+			m.btMethods = methods
+			m.mu.Unlock()
+			m.log.Printf("SDR bluetooth channel=%d adapter=%q methods=%v blob=%x", id, addr, methods, msg)
+			m.capturef("SDR", "bluetooth ch=%d adapter=%q methods=%v", id, addr, methods)
 		case "sensor":
 			types := parseSensorTypes(msg)
 			m.mu.Lock()
@@ -1184,6 +1228,188 @@ func parseChannelBlob(b []byte) (id uint64, kind string) {
 	_ = mediaType
 	_ = hasVideoCfg
 	return id, kind
+}
+
+// parseBluetoothChannel reads a Channel descriptor and returns the head unit's
+// Bluetooth adapter address and the pairing methods it advertises
+// (BluetoothChannel: adapter_address=1, supported_pairing_methods=2).
+func parseBluetoothChannel(channelBlob []byte) (string, []uint32) {
+	var addr string
+	var methods []uint32
+	i := 0
+	for i < len(channelBlob) {
+		tag, n := readVarint(channelBlob[i:])
+		if n == 0 {
+			break
+		}
+		i += n
+		fn, wt := int(tag>>3), int(tag&7)
+		if wt == 0 {
+			_, n2 := readVarint(channelBlob[i:])
+			i += n2
+			continue
+		}
+		if wt != 2 {
+			break
+		}
+		l, n2 := readVarint(channelBlob[i:])
+		if n2 == 0 || i+n2+int(l) > len(channelBlob) {
+			break
+		}
+		i += n2
+		sub := channelBlob[i : i+int(l)]
+		i += int(l)
+		if fn == 6 { // bluetooth_channel
+			addr, methods = parseBluetoothData(sub)
+		}
+	}
+	return addr, methods
+}
+
+// parseBluetoothData reads the BluetoothChannel message. Supported methods are
+// a proto3 repeated enum, so they arrive packed (wire type 2) in practice; the
+// unpacked form is accepted too.
+func parseBluetoothData(b []byte) (string, []uint32) {
+	var addr string
+	var methods []uint32
+	i := 0
+	for i < len(b) {
+		tag, n := readVarint(b[i:])
+		if n == 0 {
+			break
+		}
+		i += n
+		fn, wt := int(tag>>3), int(tag&7)
+		switch wt {
+		case 0:
+			v, n2 := readVarint(b[i:])
+			if n2 == 0 {
+				return addr, methods
+			}
+			i += n2
+			if fn == 2 {
+				methods = append(methods, uint32(v))
+			}
+		case 2:
+			l, n2 := readVarint(b[i:])
+			if n2 == 0 || i+n2+int(l) > len(b) {
+				return addr, methods
+			}
+			i += n2
+			sub := b[i : i+int(l)]
+			i += int(l)
+			switch fn {
+			case 1:
+				addr = string(sub)
+			case 2:
+				j := 0
+				for j < len(sub) {
+					v, n3 := readVarint(sub[j:])
+					if n3 == 0 {
+						break
+					}
+					j += n3
+					methods = append(methods, uint32(v))
+				}
+			}
+		default:
+			return addr, methods
+		}
+	}
+	return addr, methods
+}
+
+// parseBluetoothPairingResponse reads BluetoothPairingResponse:
+// already_paired=1 (bool), status=2 (enum: 0 none, 1 ok, 2 fail).
+func parseBluetoothPairingResponse(b []byte) (alreadyPaired bool, status uint32) {
+	i := 0
+	for i < len(b) {
+		tag, n := readVarint(b[i:])
+		if n == 0 {
+			break
+		}
+		i += n
+		fn, wt := int(tag>>3), int(tag&7)
+		if wt != 0 {
+			if wt == 2 {
+				l, n2 := readVarint(b[i:])
+				if n2 == 0 || i+n2+int(l) > len(b) {
+					break
+				}
+				i += n2 + int(l)
+				continue
+			}
+			break
+		}
+		v, n2 := readVarint(b[i:])
+		if n2 == 0 {
+			break
+		}
+		i += n2
+		switch fn {
+		case 1:
+			alreadyPaired = v != 0
+		case 2:
+			status = uint32(v)
+		}
+	}
+	return alreadyPaired, status
+}
+
+// bluetoothPairingBody builds BluetoothPairingRequest:
+// phone_address=1 (string), pairing_method=2 (enum, omitted for NONE).
+func bluetoothPairingBody(addr string, method uint32) []byte {
+	body := encodeProtoString(1, addr)
+	if method != 0 {
+		body = append(body, 0x10, byte(method))
+	}
+	return body
+}
+
+// sendBluetoothPairing opens the head unit's Bluetooth channel and announces
+// the phone's Bluetooth address. Some head units require this before they list
+// the phone as a Wireless Android Auto device, because it is how they learn
+// which Bluetooth bond belongs to this USB (or Wi-Fi) session.
+func (m *MD) sendBluetoothPairing() {
+	m.mu.Lock()
+	ch := m.BluetoothCh
+	addr, name := m.localBTAddr, m.localBTName
+	methods := append([]uint32(nil), m.btMethods...)
+	m.mu.Unlock()
+	if ch == 0 {
+		return
+	}
+	// One announcement per session: a second SDR (rare) must not open the
+	// channel again.
+	if !m.btAnnounced.CompareAndSwap(false, true) {
+		return
+	}
+	if addr == "" {
+		m.log.Printf("bluetooth: channel %d available but no local address configured, not announcing", ch)
+		return
+	}
+	if err := m.openChannel(ch); err != nil {
+		m.log.Printf("bluetooth: open channel %d: %v", ch, err)
+		return
+	}
+	// The head unit advertises the pairing methods it supports (A2DP, HFP);
+	// announce once per method, and once with NONE when it advertises none.
+	if len(methods) == 0 {
+		methods = []uint32{0}
+	}
+	seen := map[uint32]bool{}
+	for _, method := range methods {
+		if seen[method] {
+			continue
+		}
+		seen[method] = true
+		body := bluetoothPairingBody(addr, method)
+		if err := m.sendEnc(ch, frame.FlagSpecific, MsgBluetoothPairingRequest, body); err != nil {
+			m.log.Printf("bluetooth: pairing request (method %d) on channel %d: %v", method, ch, err)
+			return
+		}
+		m.log.Printf("bluetooth: pairing request sent on channel %d address=%s name=%q method=%d", ch, addr, name, method)
+	}
 }
 
 func channelMedia(b []byte) []byte {

@@ -23,6 +23,9 @@ type Peer struct {
 	videoFrames int
 	audioFrames int
 	touchesSent int
+	btRequests  int
+	btAddress   string
+	btMethods   []uint32
 	// SkipVideoAck, when set, receives video but does not MediaAck (n-ACK stall).
 	SkipVideoAck atomic.Bool
 
@@ -50,6 +53,70 @@ func (p *Peer) Touches() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.touchesSent
+}
+
+// BluetoothPairing returns how many BluetoothPairingRequest messages arrived,
+// the last phone address announced and the pairing methods that came with it.
+func (p *Peer) BluetoothPairing() (requests int, address string, methods []uint32) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.btRequests, p.btAddress, append([]uint32(nil), p.btMethods...)
+}
+
+// parseBTRequest reads BluetoothPairingRequest: phone_address=1 (string),
+// pairing_method=2 (varint enum).
+func parseBTRequest(b []byte) (string, []uint32) {
+	var addr string
+	var methods []uint32
+	i := 0
+	for i < len(b) {
+		tag, n := readVarintHu(b[i:])
+		if n == 0 {
+			break
+		}
+		i += n
+		fn, wt := int(tag>>3), int(tag&7)
+		switch wt {
+		case 0:
+			v, n2 := readVarintHu(b[i:])
+			if n2 == 0 {
+				return addr, methods
+			}
+			i += n2
+			if fn == 2 {
+				methods = append(methods, uint32(v))
+			}
+		case 2:
+			l, n2 := readVarintHu(b[i:])
+			if n2 == 0 || i+n2+int(l) > len(b) {
+				return addr, methods
+			}
+			i += n2
+			if fn == 1 {
+				addr = string(b[i : i+int(l)])
+			}
+			i += int(l)
+		default:
+			return addr, methods
+		}
+	}
+	return addr, methods
+}
+
+func readVarintHu(b []byte) (uint64, int) {
+	var x uint64
+	var s uint
+	for i := 0; i < len(b); i++ {
+		x |= uint64(b[i]&0x7f) << s
+		if b[i]&0x80 == 0 {
+			return x, i + 1
+		}
+		s += 7
+		if s > 63 {
+			break
+		}
+	}
+	return 0, 0
 }
 
 func New(rw io.ReadWriter, ssl *aassl.Session, logger *log.Logger) *Peer {
@@ -209,6 +276,20 @@ func (p *Peer) sendSSL(out []byte) error {
 }
 
 func (p *Peer) onChannel(ch uint8, msgType uint16, body, full []byte) error {
+	// 0x8001 is reused on several channels (InputEvent, MediaStartInd): the
+	// Bluetooth pairing request is only defined on channel 10.
+	if ch == 10 && msgType == session.MsgBluetoothPairingRequest {
+		addr, methods := parseBTRequest(body)
+		p.mu.Lock()
+		p.btRequests++
+		p.btAddress = addr
+		p.btMethods = append(p.btMethods, methods...)
+		p.mu.Unlock()
+		// already_paired=true, status=OK: the car recognised the bond.
+		resp := frame.PutU16(nil, session.MsgBluetoothPairingResponse)
+		resp = append(resp, 0x08, 0x01, 0x10, 0x01)
+		return p.enqueue(ch, frame.FlagBulk|frame.FlagEncrypted|frame.FlagSpecific, resp)
+	}
 	switch msgType {
 	case session.MsgChannelOpenRequest:
 		resp := frame.PutU16(nil, session.MsgChannelOpenResponse)
@@ -292,7 +373,7 @@ func encodeKV(field int, val []byte) []byte {
 }
 
 // buildTestSDR returns a hand-built ServiceDiscoveryResponse protobuf advertising
-// sensor(1), video(2), input(3), audio(4).
+// sensor(1), video(2), input(3), audio(4) and bluetooth(10).
 func buildTestSDR() []byte {
 	// We'll build channels as length-delimited field 1 messages.
 	var out []byte
@@ -300,7 +381,16 @@ func buildTestSDR() []byte {
 	out = append(out, channelMsg(session.ChanVideo, videoChannel())...)
 	out = append(out, channelMsg(session.ChanInput, inputChannel())...)
 	out = append(out, channelMsg(session.ChanAudio, audioChannel())...)
+	out = append(out, channelMsg(10, bluetoothChannel())...)
 	return out
+}
+
+// bluetoothChannel is BluetoothChannel{adapter_address, supported_pairing_methods}
+// as a Channel descriptor payload (field 6 of Channel).
+func bluetoothChannel() []byte {
+	bt := encodeKV(1, []byte("10:32:2C:50:5D:5E"))
+	bt = append(bt, 0x12, 0x02, 0x02, 0x04) // packed methods: A2DP(2), HFP(4)
+	return encodeKV(6, bt)
 }
 
 func channelMsg(id uint8, specific []byte) []byte {

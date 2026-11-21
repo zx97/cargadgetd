@@ -41,4 +41,3 @@ func TestFragmentRoundTrip(t *testing.T) {
 		t.Fatalf("len got=%d want=%d", len(got), len(payload))
 	}
 }
-

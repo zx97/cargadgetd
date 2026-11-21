@@ -132,6 +132,12 @@ func main() {
 	}
 	log.Printf("control on %s %s", cn, ca)
 
+	// The phone's Bluetooth identity: announced on the Android Auto Bluetooth
+	// channel so the head unit ties its USB (and Wi-Fi) sessions to the same
+	// Bluetooth bond — that link is what makes wireless AA available.
+	btName, btAddr, usbName := wireless.LocalNames()
+	log.Printf("wireless: car sees bluetooth name=%q addr=%s, usb name=%q", btName, btAddr, usbName)
+
 	serve := func(rw io.ReadWriteCloser, peer string, usbBulk bool) {
 		defer rw.Close()
 		log.Printf("HU connected from %s", peer)
@@ -147,6 +153,7 @@ func main() {
 		defer ssl.Close()
 		md := session.NewMD(rw, ssl, log.Default())
 		md.SetUSBBulk(usbBulk)
+		md.SetLocalBluetooth(btAddr, btName)
 		mdMu.md = md
 		defer func() { mdMu.md = nil }()
 		runSession(md, *autoAV, usbBulk)
@@ -156,9 +163,7 @@ func main() {
 		log.Printf("wireless: Bluetooth name=%q addr=%q channel=%d iface=%s",
 			*wirelessName, *wirelessAddr, *wirelessChannel, *wirelessIface)
 		st := wireless.NewStatus()
-		btName, btAddr, usbName := wireless.LocalNames()
 		st.SetNames(btName, usbName)
-		log.Printf("wireless: car sees bluetooth name=%q addr=%s, usb name=%q", btName, btAddr, usbName)
 		if mat.ExpiresIn < 0 {
 			st.SetStatic("Certificat MD", false, fmt.Sprintf("expiré (expires_in=%ds)", mat.ExpiresIn))
 		} else {

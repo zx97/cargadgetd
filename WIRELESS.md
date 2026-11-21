@@ -75,6 +75,46 @@ rather than leaving the user to guess:
 Both are the same phone. The car lists the **Bluetooth** name for Wireless
 Android Auto; the USB name only appears while the cable is plugged in.
 
+### How the head unit links the USB session to the Bluetooth bond
+
+Names are labels; they are never the link. Three independent identities exist:
+
+| Identity | Value | Where it comes from |
+| --- | --- | --- |
+| USB device | `18d1:2d00` + descriptor strings | the phone's gadget |
+| Bluetooth bond | `BD_ADDR` + link key | BlueZ / the car |
+| AA session | reversegearhead TLS certificate | the same in USB and Wi-Fi |
+
+The missing piece on a plain Linux MD is the bridge between the first two.
+Android Auto carries a **Bluetooth channel** (service 10) inside the normal
+session: the MD opens it and sends `BluetoothPairingRequest` with its
+`phone_address`. The head unit stores "this USB/Wi-Fi session belongs to that
+Bluetooth device", which is what lets it offer Wireless Android Auto later.
+
+cargadgetd implements it:
+
+```mermaid
+sequenceDiagram
+    participant MD as cargadgetd
+    participant HU as Head unit
+    HU->>MD: ServiceDiscoveryResponse (channel 10 = Bluetooth, adapter 10:32:2C:…)
+    MD->>HU: ChannelOpenRequest (channel 10)
+    HU-->>MD: ChannelOpenResponse (OK)
+    MD->>HU: BluetoothPairingRequest phone_address=50:56:A8:06:03:39, methods A2DP/HFP
+    HU-->>MD: BluetoothPairingResponse already_paired=true, status=OK
+```
+
+Log lines to look for:
+
+```
+SDR bluetooth channel=10 adapter="10:32:2C:50:5D:5E" methods=[2 4]
+bluetooth: pairing request sent on channel 10 address=50:56:A8:06:03:39 name="Manolla" method=2
+bluetooth: pairing response already_paired=true status=1 (0 none, 1 ok, 2 fail)
+```
+
+`already_paired=true` confirms the car recognised the phone's Bluetooth bond.
+The address comes from `Adapter1.Address`, never from a configured name.
+
 
 ## Root-only D-Bus calls (Sailfish)
 
