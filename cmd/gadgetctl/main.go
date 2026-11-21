@@ -28,6 +28,7 @@ import (
 	"github.com/cargadgetd/cargadgetd/internal/aoa"
 	"github.com/cargadgetd/cargadgetd/internal/ffs"
 	"github.com/cargadgetd/cargadgetd/internal/usbcable"
+	"github.com/cargadgetd/cargadgetd/internal/wireless"
 )
 
 func main() {
@@ -40,7 +41,21 @@ func main() {
 	noModed := flag.Bool("no-usb-moded", false, "do not touch usb-moded")
 	aoaWait := flag.Bool("aoa", false, "wait for AOA START (Android Auto), then bind the accessory gadget")
 	aoaService := flag.String("aoa-service", "", "start, stop, or restart cargadgetd-aoa.service (setuid)")
+	wifiConnect := flag.String("wifi-connect", "", "connect a saved Wi-Fi service (setuid root) and exit")
 	flag.Parse()
+
+	if *wifiConnect != "" {
+		if os.Geteuid() != 0 {
+			log.Fatal("gadgetctl -wifi-connect needs root (install setuid RPM or use devel-su)")
+		}
+		if err := becomeRoot(); err != nil {
+			log.Fatalf("become root: %v", err)
+		}
+		if err := wireless.ConnectWiFi(*wifiConnect); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if *aoaService != "" {
 		switch *aoaService {

@@ -2,49 +2,61 @@ package wireless
 
 import (
 	"fmt"
+	"os/exec"
 	"strings"
 
+	"github.com/cargadgetd/cargadgetd/internal/cfg"
 	"github.com/godbus/dbus/v5"
 )
 
-const (
-	connmanService = "net.connman"
-)
+const connmanService = "net.connman"
 
 // connmanNetService is one of ConnMan's network services.
 type connmanNetService struct {
 	Path  dbus.ObjectPath
 	Name  string
 	State string
+	Type  string
 }
 
-// connmanWiFiServices returns the Wi-Fi services ConnMan knows about.
-func connmanWiFiServices() ([]connmanNetService, error) {
+// connmanServices lists ConnMan services. Current ConnMan returns
+// a(oa{sv}) from Manager.GetServices (path + properties), not a bare ao.
+func connmanServices() ([]connmanNetService, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return nil, fmt.Errorf("system bus: %w", err)
 	}
-	var paths []dbus.ObjectPath
+	var entries []struct {
+		Path  dbus.ObjectPath
+		Props map[string]dbus.Variant
+	}
 	if err := conn.Object(connmanService, "/").
-		Call("net.connman.Manager.GetServices", 0).Store(&paths); err != nil {
+		Call("net.connman.Manager.GetServices", 0).Store(&entries); err != nil {
 		return nil, fmt.Errorf("connman services: %w", err)
 	}
-	var out []connmanNetService
-	for _, path := range paths {
-		var props map[string]dbus.Variant
-		if err := conn.Object(connmanService, path).
-			Call("org.freedesktop.DBus.Properties.GetAll", 0, "net.connman.Service").
-			Store(&props); err != nil {
-			continue
-		}
-		if variantString(props["Type"]) != "wifi" {
-			continue
-		}
+	out := make([]connmanNetService, 0, len(entries))
+	for _, e := range entries {
 		out = append(out, connmanNetService{
-			Path:  path,
-			Name:  variantString(props["Name"]),
-			State: variantString(props["State"]),
+			Path:  e.Path,
+			Name:  variantString(e.Props["Name"]),
+			State: variantString(e.Props["State"]),
+			Type:  variantString(e.Props["Type"]),
 		})
+	}
+	return out, nil
+}
+
+// connmanWiFiServices returns the Wi-Fi services ConnMan knows about.
+func connmanWiFiServices() ([]connmanNetService, error) {
+	all, err := connmanServices()
+	if err != nil {
+		return nil, err
+	}
+	var out []connmanNetService
+	for _, s := range all {
+		if s.Type == "wifi" {
+			out = append(out, s)
+		}
 	}
 	return out, nil
 }
@@ -76,31 +88,44 @@ func savedSSIDFor(name string) string {
 }
 
 // connmanConnect asks ConnMan to connect the saved Wi-Fi service whose SSID is
-// ssid. The phone normally keeps the car's AP as a saved service, so this is
-// only needed when another network is currently preferred.
+// ssid. ConnMan denies Service.Connect to a plain user session, so the setuid
+// gadget helper is tried first (it runs as root); the direct call is the
+// fallback.
 func connmanConnect(ssid string) error {
-	conn, err := dbus.SystemBus()
+	bin := cfg.Get().Gadget.Bin
+	if bin != "" {
+		out, err := exec.Command(bin, "-wifi-connect", ssid).CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		helperErr := fmt.Errorf("wifi helper: %v (%s)", err, strings.TrimSpace(string(out)))
+		if derr := connmanConnectDirect(ssid); derr != nil {
+			return fmt.Errorf("%v; direct: %v", helperErr, derr)
+		}
+		return nil
+	}
+	return connmanConnectDirect(ssid)
+}
+
+// ConnectWiFi is the direct ConnMan connect used by the setuid helper (root).
+func ConnectWiFi(ssid string) error {
+	return connmanConnectDirect(ssid)
+}
+
+func connmanConnectDirect(ssid string) error {
+	services, err := connmanWiFiServices()
 	if err != nil {
-		return fmt.Errorf("system bus: %w", err)
+		return err
 	}
-	var services []dbus.ObjectPath
-	obj := conn.Object(connmanService, "/")
-	if err := obj.Call("net.connman.Manager.GetServices", 0).Store(&services); err != nil {
-		return fmt.Errorf("connman services: %w", err)
-	}
-	for _, path := range services {
-		var props map[string]dbus.Variant
-		if err := conn.Object(connmanService, path).
-			Call("org.freedesktop.DBus.Properties.GetAll", 0, "net.connman.Service").
-			Store(&props); err != nil {
+	for _, s := range services {
+		if !strings.EqualFold(s.Name, ssid) {
 			continue
 		}
-		name := variantString(props["Name"])
-		typ := variantString(props["Type"])
-		if typ != "wifi" || !strings.EqualFold(name, ssid) {
-			continue
+		conn, err := dbus.SystemBus()
+		if err != nil {
+			return fmt.Errorf("system bus: %w", err)
 		}
-		if err := conn.Object(connmanService, path).
+		if err := conn.Object(connmanService, s.Path).
 			Call("net.connman.Service.Connect", 0).Err; err != nil {
 			return fmt.Errorf("connman connect %q: %w", ssid, err)
 		}

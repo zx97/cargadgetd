@@ -42,7 +42,7 @@ func TestRenderPageEmpty(t *testing.T) {
 	if !strings.Contains(got, "En attente") {
 		t.Fatal("empty page should show the idle line")
 	}
-	if strings.Contains(got, "Rejoindre le Wi-Fi") {
-		t.Fatal("no Wi-Fi button without an SSID")
+	if !strings.Contains(got, `id="wifiForm" method="post" action="/wifi" style="display:none"`) {
+		t.Fatal("Wi-Fi form should be hidden without an SSID")
 	}
 }

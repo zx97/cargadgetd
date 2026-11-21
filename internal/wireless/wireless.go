@@ -38,9 +38,10 @@ func (o *Options) logf(format string, args ...any) {
 	}
 }
 
-// Dial performs the Wireless Android Auto bootstrap against a paired head unit
-// and returns the TCP connection to it. The caller runs the normal MD session
-// on the connection: the phone is still the TLS server.
+// Dial performs the Wireless Android Auto bootstrap. The primary path is the
+// RFCOMM server profile: the head unit sees the AA UUID in the phone's SDP
+// record and connects to us. Older head units expect the phone to connect;
+// after a short wait the client path is tried as a fallback.
 func Dial(ctx context.Context, opt Options) (net.Conn, error) {
 	if opt.Interface == "" {
 		opt.Interface = "wlan0"
@@ -72,20 +73,6 @@ func Dial(ctx context.Context, opt Options) (net.Conn, error) {
 			opt.logf("wifi: connman %q state=%s", s.Name, s.State)
 		}
 	}
-	if err := dev.Connect(); err != nil {
-		opt.logf("bluetooth: connect %s: %v", dev.Address, err)
-		st.Set("Lien Bluetooth", false, err.Error())
-	} else {
-		opt.logf("bluetooth: connected %s", dev.Address)
-		st.Set("Lien Bluetooth", true, "connecté")
-	}
-	if dev.WaitConnected(10 * time.Second) {
-		opt.logf("bluetooth: link up")
-		st.Set("Lien Bluetooth", true, "lien monté")
-	} else {
-		opt.logf("bluetooth: link still down")
-		st.Set("Lien Bluetooth", false, "lien non monté")
-	}
 
 	// Guess the car's AP from its Bluetooth name and the Wi-Fi networks already
 	// saved on the phone. The authoritative SSID still comes from the WPP
@@ -107,6 +94,45 @@ func Dial(ctx context.Context, opt Options) (net.Conn, error) {
 		}
 	} else {
 		st.Set("Wi-Fi auto", false, "aucun réseau enregistré ne correspond au nom Bluetooth")
+	}
+
+	// Primary path: the head unit connects to the phone's AA RFCOMM profile.
+	if conns, err := ensureAAProfile(opt.logf); err != nil {
+		st.Set("Profil AA", false, err.Error())
+		opt.logf("profile: %v", err)
+	} else {
+		st.Set("Profil AA", true, "enregistré, attente de la voiture")
+		st.Phase("profile")
+		select {
+		case f := <-conns:
+			rc := &fileConn{File: f}
+			st.Set("RFCOMM entrant", true, "voiture connectée")
+			st.Set("Lien Bluetooth", true, "voiture connectée")
+			st.Phase("wpp")
+			opt.logf("rfcomm: incoming connection from the head unit")
+			return handshake(ctx, rc, opt, st, guess)
+		case <-time.After(20 * time.Second):
+			st.Set("Profil AA", false, "pas de connexion entrante, essai client")
+			opt.logf("profile: no incoming connection, falling back to client")
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	// Fallback: some head units expect the phone to connect to them.
+	if err := dev.Connect(); err != nil {
+		opt.logf("bluetooth: connect %s: %v", dev.Address, err)
+		st.Set("Lien Bluetooth", false, err.Error())
+	} else {
+		opt.logf("bluetooth: connected %s", dev.Address)
+		st.Set("Lien Bluetooth", true, "connecté")
+	}
+	if dev.WaitConnected(10 * time.Second) {
+		opt.logf("bluetooth: link up")
+		st.Set("Lien Bluetooth", true, "lien monté")
+	} else {
+		opt.logf("bluetooth: link still down")
+		st.Set("Lien Bluetooth", false, "lien non monté")
 	}
 
 	channel := opt.Channel
@@ -139,10 +165,16 @@ func Dial(ctx context.Context, opt Options) (net.Conn, error) {
 		st.Set("RFCOMM", false, err.Error())
 		return nil, err
 	}
-	defer rc.Close()
 	st.Set("RFCOMM", true, fmt.Sprintf("canal %d", channel))
 	st.Phase("wpp")
 	opt.logf("rfcomm: connected to %s channel %d", dev.Address, channel)
+	return handshake(ctx, rc, opt, st, guess)
+}
+
+// handshake runs the WPP exchange on rc, joins the car's AP, and returns the
+// TCP connection where the phone is the TLS server.
+func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess string) (net.Conn, error) {
+	defer rc.Close()
 	// The legacy handshake starts with the phone asking for the AP info.
 	if err := writeWPP(rc, wppInfoRequest, nil); err != nil {
 		return nil, err
@@ -205,6 +237,7 @@ func Dial(ctx context.Context, opt Options) (net.Conn, error) {
 			ip, port, s, k, b, sec := parseSetupInfo(pkt.Payload)
 			if ip != "" {
 				endpoint = net.JoinHostPort(ip, fmt.Sprint(port))
+				st.Set("WPP endpoint", true, endpoint)
 			}
 			if s != "" {
 				ssid, key, bssid, security = s, k, b, sec
