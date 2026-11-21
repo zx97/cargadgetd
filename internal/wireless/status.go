@@ -241,6 +241,10 @@ func nextStep(s Snapshot) (string, string) {
 	if name == "" {
 		name = "le téléphone"
 	}
+	// Nothing can work without the Bluetooth bond: say so before anything else.
+	if s.Error != "" && strings.Contains(s.Error, "aucune voiture appairée") {
+		return fmt.Sprintf("Appaire %s à la voiture (menu Bluetooth de l'écran), puis touche « Redémarrer ».", name), "action"
+	}
 	// Wired mode: the launcher unit is the first thing that can be wrong, and
 	// it is the failure that looks like "the car refuses the phone".
 	if s.USB.Transport == "usb" && s.USB.ServiceState != "active" {

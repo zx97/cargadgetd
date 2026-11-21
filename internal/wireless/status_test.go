@@ -58,6 +58,15 @@ func TestNextStepTellsWhatToDo(t *testing.T) {
 			want: "Réparer l'USB",
 			kind: "action",
 		},
+		{
+			name: "car not paired",
+			snap: Snapshot{
+				BluetoothName: "Manolla",
+				Error:         "aucune voiture appairée : appaire le téléphone depuis le menu Bluetooth de la voiture",
+			},
+			want: "Appaire Manolla",
+			kind: "action",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

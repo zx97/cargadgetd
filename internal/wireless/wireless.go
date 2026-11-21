@@ -74,9 +74,18 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	t := time.Now()
 	dev, err := FindDevice(opt.Name, opt.Address)
 	if err != nil {
-		st.Error(err)
-		st.Set("Bluetooth appairé", false, err.Error())
-		return nil, err
+		opt.logf("bluetooth: device lookup failed in %s: %v", sinceText(t), err)
+		// The most common cause by far: the phone is not paired with the car any
+		// more (a re-pair attempt, a car-side delete). Say it in one sentence
+		// instead of dumping the device list on the page; the list stays in the
+		// log for diagnosis.
+		human := err
+		if strings.Contains(err.Error(), "no paired Bluetooth device") {
+			human = fmt.Errorf("aucune voiture appairée : appaire le téléphone depuis le menu Bluetooth de la voiture, puis touche « Redémarrer »")
+		}
+		st.Error(human)
+		st.Set("Bluetooth appairé", false, human.Error())
+		return nil, human
 	}
 	opt.logf("bluetooth: device found in %s", sinceText(t))
 	st.Set("Bluetooth appairé", true, fmt.Sprintf("%s %s", dev.Name, dev.Address))

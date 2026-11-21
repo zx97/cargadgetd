@@ -289,7 +289,11 @@ async function tick(){
   let s;
   try { s = JSON.parse(txt); } catch(e) { return; }
   let text='Arrêté', cls='idle';
-  if (s.Error && !s.Running) { if (s.Error.indexOf('voiture absente')>=0) { text='En attente de la voiture'; cls='wait'; } else { text='Erreur'; cls='ko'; } }
+  if (s.Error && !s.Running) {
+    if (s.Error.indexOf('voiture absente')>=0) { text='En attente de la voiture'; cls='wait'; }
+    else if (s.Error.indexOf('aucune voiture appair')>=0) { text='Voiture non appairée'; cls='wait'; }
+    else { text='Erreur'; cls='ko'; }
+  }
   else if (s.Running && s.Phase==='session') { text='Android Auto connecté'; cls='ok'; }
   else if (s.Running) { text='Connexion…'; cls='wait'; }
   const b=$('banner');
