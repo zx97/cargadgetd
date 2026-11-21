@@ -27,22 +27,27 @@ type Snapshot struct {
 // Status is the live state of the wireless bootstrap. All methods are safe on a
 // nil receiver so the package can be used without a status page.
 type Status struct {
-	mu       sync.Mutex
-	phase    string
-	running  bool
-	started  time.Time
-	checks   map[string]*Check
-	order    []string
-	err      string
-	wpp      []string
-	wifiWant string
+	mu          sync.Mutex
+	phase       string
+	running     bool
+	started     time.Time
+	checks      map[string]*Check
+	order       []string
+	static      map[string]*Check
+	staticOrder []string
+	err         string
+	wpp         []string
+	wifiWant    string
 }
 
 const wppLogMax = 60
 
 // NewStatus returns an empty status.
 func NewStatus() *Status {
-	return &Status{checks: make(map[string]*Check)}
+	return &Status{
+		checks: make(map[string]*Check),
+		static: make(map[string]*Check),
+	}
 }
 
 // Reset clears a previous run.
@@ -73,6 +78,23 @@ func (s *Status) Set(name string, ok bool, detail string) {
 		c = &Check{Name: name}
 		s.checks[name] = c
 		s.order = append(s.order, name)
+	}
+	c.OK = ok
+	c.Detail = detail
+}
+
+// SetStatic upserts a check that survives Reset (certificates, hardware).
+func (s *Status) SetStatic(name string, ok bool, detail string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, exists := s.static[name]
+	if !exists {
+		c = &Check{Name: name}
+		s.static[name] = c
+		s.staticOrder = append(s.staticOrder, name)
 	}
 	c.OK = ok
 	c.Detail = detail
@@ -161,6 +183,9 @@ func (s *Status) Snapshot() Snapshot {
 		Started:  s.started,
 		Error:    s.err,
 		WiFiWant: s.wifiWant,
+	}
+	for _, name := range s.staticOrder {
+		snap.Checks = append(snap.Checks, *s.static[name])
 	}
 	for _, name := range s.order {
 		snap.Checks = append(snap.Checks, *s.checks[name])

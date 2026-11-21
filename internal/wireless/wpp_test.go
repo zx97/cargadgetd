@@ -150,6 +150,14 @@ func TestStatusSnapshot(t *testing.T) {
 	if len(st.Snapshot().Checks) != 0 || st.Snapshot().WiFiWant != "" {
 		t.Fatal("reset did not clear")
 	}
+
+	// Static checks survive Reset.
+	st.SetStatic("Certificat MD", false, "expiré")
+	st.Reset()
+	snap = st.Snapshot()
+	if len(snap.Checks) != 1 || snap.Checks[0].Name != "Certificat MD" || snap.Checks[0].OK {
+		t.Fatalf("static check: %+v", snap.Checks)
+	}
 }
 
 func TestControllerJoinWiFiUnknown(t *testing.T) {

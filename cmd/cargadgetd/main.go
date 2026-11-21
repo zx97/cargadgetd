@@ -152,6 +152,11 @@ func main() {
 		log.Printf("wireless: Bluetooth name=%q addr=%q channel=%d iface=%s",
 			*wirelessName, *wirelessAddr, *wirelessChannel, *wirelessIface)
 		st := wireless.NewStatus()
+		if mat.ExpiresIn < 0 {
+			st.SetStatic("Certificat MD", false, fmt.Sprintf("expiré (expires_in=%ds)", mat.ExpiresIn))
+		} else {
+			st.SetStatic("Certificat MD", true, fmt.Sprintf("valide (%ds)", mat.ExpiresIn))
+		}
 		ctl := wireless.NewController(wireless.Options{
 			Name:      *wirelessName,
 			Address:   *wirelessAddr,
