@@ -183,6 +183,9 @@ func AdapterSetup(adapter dbus.ObjectPath) error {
 // dbusErrText names the D-Bus error when its body is empty (Sailfish answers
 // AuthFailed with no message), so the log line stays useful.
 func dbusErrText(err error) string {
+	if err == nil {
+		return "<nil>"
+	}
 	derr, ok := err.(dbus.Error)
 	if !ok {
 		ptr, isPtr := err.(*dbus.Error)
@@ -243,24 +246,43 @@ func (d *Device) EnsureAdapter(logf func(string, ...any)) {
 	}
 }
 
-// WaitConnected polls Device1.Connected until the ACL link is up.
-func (d *Device) WaitConnected(timeout time.Duration) bool {
+// WaitConnected polls Device1.Connected until the ACL link is up, logging each
+// state change so the log shows how long the link took (or that it never came).
+func (d *Device) WaitConnected(timeout time.Duration, logf func(string, ...any)) bool {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
 	conn, err := dbus.SystemBus()
 	if err != nil {
+		logf("bluetooth: wait link: system bus: %v", err)
 		return false
 	}
-	deadline := time.Now().Add(timeout)
+	start := time.Now()
+	deadline := start.Add(timeout)
+	prev := "unknown"
+	polls := 0
 	for time.Now().Before(deadline) {
 		var v dbus.Variant
 		err := conn.Object(bluezService, d.Path).
 			Call("org.freedesktop.DBus.Properties.Get", 0, bluezDeviceIface, "Connected").
 			Store(&v)
+		var state string
 		if err == nil {
 			if b, _ := v.Value().(bool); b {
+				logf("bluetooth: link up after %s (%d polls)", sinceText(start), polls)
 				return true
 			}
+			state = "down"
+		} else {
+			state = "error:" + dbusErrText(err)
 		}
+		if state != prev {
+			logf("bluetooth: link %s after %s (%d polls)", state, sinceText(start), polls)
+			prev = state
+		}
+		polls++
 		time.Sleep(500 * time.Millisecond)
 	}
+	logf("bluetooth: link never came up within %s (%d polls, last=%s)", timeout, polls, prev)
 	return false
 }

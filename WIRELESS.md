@@ -62,6 +62,20 @@ the car's first-time trust step.
 The status page shows the adapter state (Powered / Discoverable / Pairable) and
 the device properties (Bonded / Trusted / ServicesResolved).
 
+### Two names for one phone
+
+The head unit names the phone differently in each mode, and the page says so
+rather than leaving the user to guess:
+
+| Mode | Name source | Example |
+| --- | --- | --- |
+| Wireless | BlueZ adapter alias (`Adapter1.Alias`) | `Manolla` |
+| USB cable | gadget product string, built from `/etc/machine-info` `PRETTY_HOSTNAME` | `Jolla Phone (2026)` |
+
+Both are the same phone. The car lists the **Bluetooth** name for Wireless
+Android Auto; the USB name only appears while the cable is plugged in.
+
+
 ## Root-only D-Bus calls (Sailfish)
 
 Sailfish answers `org.freedesktop.DBus.Error.AuthFailed` (with an empty message)
@@ -104,10 +118,57 @@ car; **Redémarrer** re-execs the daemon from the installed binary (reloads an
 updated build and resets the controller) without a shell. The daemon keeps
 running so the page stays available.
 
+Above the buttons, the **Quoi faire** box gives exactly one instruction for the
+current state ("allume le contact", "sur l'écran de la voiture : Appareils
+mobiles → « Manolla » → Android Auto", "tu peux rouler"), so the driver never
+has to read the check list. The daemon never gives up: after a failed attempt it
+watches the Bluetooth link, the ConnMan state and the association, and starts a
+new cycle as soon as one of them changes (or after 15 s at most).
+
+
 Logs: `~/wireless.log` (wireless daemon) and `~/cargadgetd.log` (USB daemon).
 The status page lists the failing check and the raw WPP exchange. It polls
 `/status` once a second and patches the DOM in place, so the page never reloads
 or flickers (a `meta refresh` did, badly, on the phone).
+
+## Reading the log
+
+Every attempt is bounded and self-documenting: timestamps carry milliseconds and
+each phase logs its duration, so one attempt can be read top to bottom without a
+sniffer.
+
+```mermaid
+flowchart LR
+    A["attempt: start"] --> B["dial: begin"]
+    B --> C["bluetooth: device found in …"]
+    C --> D["bluetooth: adapter configured / by the root helper"]
+    D --> E["profile: waiting up to 30s"]
+    E -->|car connects| F["profile: NewConnection / rfcomm: incoming"]
+    E -->|timeout| G["bluetooth: Device1.Connect / link up?"]
+    G --> H["sdp: attempt N failed after …"]
+    H --> I["rfcomm: connected … fd="]
+    F --> J["wpp tx / wpp rx (len + hex)"]
+    I --> J
+    J --> K["wpp: end after … rx=… tx=… last_rx_age=…"]
+    K --> L["dial: FAILED after … / dial: connected after …"]
+```
+
+| Log line | Meaning |
+| --- | --- |
+| `attempt: FAILED after 1m34s: voiture absente …` | whole attempt summary; the duration matters |
+| `bluetooth: Device1.Connect failed after 7.7s: br-connection-page-timeout` | the car did not answer the page |
+| `bluetooth: link never came up within 10s (20 polls, last=down)` | ACL link never established |
+| `sdp: attempt 1 failed after 7.7s: … host is down` | SDP L2CAP connect timed out (7.7 s is the baseband page timeout) |
+| `profile: NewConnection from … fd=` | the head unit connected to the phone's AA service |
+| `rfcomm: connected … (fd=)` | client path connected; the channel and fd identify the service |
+| `wpp tx/rx: id=… len=… hex=…` | exact WPP bytes, both directions |
+| `wpp: end after … rx=0 tx=1 last_rx_age=…` | the car never answered the info request |
+| `wifi: join #N … hors de portée` | ConnMan cannot see the car AP yet |
+
+A head unit that never answers `wpp tx: id=2` is the signature of a wrong
+RFCOMM channel (connected to another service) or of a car that wants the phone
+to wait: the SDP channel lookup above it tells which case applies.
+
 
 ## Wi-Fi selection
 

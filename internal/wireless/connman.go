@@ -1,6 +1,7 @@
 package wireless
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -89,22 +90,53 @@ func savedSSIDFor(name string) string {
 
 // connmanConnect asks ConnMan to connect the saved Wi-Fi service whose SSID is
 // ssid. ConnMan denies Service.Connect to a plain user session, so the setuid
-// gadget helper is tried first (it runs as root); the direct call is the
-// fallback.
+// gadget helper is tried first (it runs as root). When the helper ran, its
+// answer is authoritative: the direct call would only add a misleading
+// "Permission denied" to a perfectly good "No carrier" diagnosis.
 func connmanConnect(ssid string) error {
 	bin := cfg.Get().Gadget.Bin
 	if bin != "" {
 		out, err := exec.Command(bin, "-wifi-connect", ssid).CombinedOutput()
+		msg := strings.TrimSpace(string(out))
 		if err == nil {
 			return nil
 		}
-		helperErr := fmt.Errorf("wifi helper: %v (%s)", err, strings.TrimSpace(string(out)))
-		if derr := connmanConnectDirect(ssid); derr != nil {
-			return fmt.Errorf("%v; direct: %v", helperErr, derr)
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || strings.Contains(msg, "needs root") {
+			// The helper did not run as root: fall back to the direct call,
+			// which fails cleanly and is translated for the page.
+			return friendlyWiFiError(ssid, connmanConnectDirect(ssid))
 		}
+		return friendlyWiFiError(ssid, connmanErrorFromHelper(msg))
+	}
+	return friendlyWiFiError(ssid, connmanConnectDirect(ssid))
+}
+
+// connmanErrorFromHelper drops the log timestamp/prefix added by the helper.
+func connmanErrorFromHelper(out string) error {
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	last := strings.TrimSpace(lines[len(lines)-1])
+	if i := strings.Index(last, "connman connect "); i >= 0 {
+		last = last[i:]
+	}
+	return errors.New(last)
+}
+
+// friendlyWiFiError turns ConnMan's wording into something a driver can act on.
+func friendlyWiFiError(ssid string, err error) error {
+	if err == nil {
 		return nil
 	}
-	return connmanConnectDirect(ssid)
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "Already connected"), strings.Contains(s, "In progress"):
+		return nil
+	case strings.Contains(s, "No carrier"), strings.Contains(s, "no carrier"):
+		return fmt.Errorf("réseau « %s » hors de portée : allume le contact de la voiture", ssid)
+	case strings.Contains(s, "Permission denied"), strings.Contains(s, "AuthFailed"):
+		return fmt.Errorf("ConnMan refuse l'accès : helper setuid absent (réinstalle le paquet)")
+	}
+	return err
 }
 
 // ConnectWiFi is the direct ConnMan connect used by the setuid helper (root).

@@ -24,6 +24,8 @@ type Controller struct {
 	stopped bool
 	cancel  context.CancelFunc
 	conn    net.Conn
+	// attempts counts connection cycles since start, for the log.
+	attempts int
 }
 
 // NewController builds a controller and wires the status into Options.
@@ -55,6 +57,9 @@ func (c *Controller) Run(ctx context.Context) {
 		}
 		c.Status.Reset()
 		c.Status.Running(true)
+		attemptStart := time.Now()
+		c.attempts++
+		c.logf("attempt #%d: start (device=%q addr=%q channel=%d)", c.attempts, c.Opt.Name, c.Opt.Address, c.Opt.Channel)
 
 		runCtx, cancel := context.WithCancel(ctx)
 		c.mu.Lock()
@@ -64,18 +69,22 @@ func (c *Controller) Run(ctx context.Context) {
 
 		conn, err := Dial(runCtx, c.Opt)
 		if err != nil {
+			c.logf("attempt #%d: FAILED after %s: %v", c.attempts, sinceText(attemptStart), err)
 			c.Status.Error(err)
 			c.Status.Set("Connexion", false, err.Error())
 			c.finish()
 		} else {
+			c.logf("attempt #%d: connected after %s", c.attempts, sinceText(attemptStart))
 			c.mu.Lock()
 			c.conn = conn
 			c.mu.Unlock()
+			sessionStart := time.Now()
 			if c.Serve != nil {
 				c.Serve(conn)
 			} else {
 				_ = conn.Close()
 			}
+			c.logf("session: ended after %s", sinceText(sessionStart))
 			c.finish()
 		}
 
@@ -85,13 +94,24 @@ func (c *Controller) Run(ctx context.Context) {
 		if stopped {
 			continue
 		}
-		select {
-		case <-ctx.Done():
+		// Never give up: wait for the car to move (Bluetooth link, AP in range)
+		// and restart the whole cycle as soon as it does, or after max.
+		const maxWait = 15 * time.Second
+		if reason := WaitForChange(ctx, c.Opt, maxWait, c.Opt.logf); reason != "" {
+			c.logf("attempt #%d: situation changed (%s), starting a new cycle now", c.attempts, reason)
+		} else {
+			c.logf("attempt #%d: retrying after %s", c.attempts, maxWait)
+		}
+		if ctx.Err() != nil {
 			return
-		case <-time.After(3 * time.Second):
 		}
 		c.Start()
 	}
+}
+
+// logf forwards to the options logger, if any.
+func (c *Controller) logf(format string, args ...any) {
+	c.Opt.logf(format, args...)
 }
 
 func (c *Controller) finish() {

@@ -58,30 +58,38 @@ func logWiFi(iface string, logf func(string, ...any)) {
 func waitWifi(ctx context.Context, iface, want string, timeout time.Duration, logf func(string, ...any), st *Status) error {
 	start := time.Now()
 	nextJoin := start
+	prev := ""
+	joins := 0
 	for {
 		ssid := wifiSSID(iface)
 		ip := wifiIPv4(iface)
 		match := want == "" || strings.EqualFold(ssid, want)
+		if cur := fmt.Sprintf("ssid=%q ip=%q", ssid, ip); cur != prev {
+			logf("wifi: %s now %s at +%s (want %q)", iface, cur, sinceText(start), want)
+			prev = cur
+		}
 		st.Set("Wi-Fi voiture", match && ip != "", fmt.Sprintf("actuel=%q attendu=%q ip=%q", ssid, want, ip))
 		if match && ip != "" {
-			logf("wifi: %s ssid=%q ip=%s after %s", iface, ssid, ip, time.Since(start).Round(time.Millisecond))
+			logf("wifi: %s ssid=%q ip=%s after %s", iface, ssid, ip, sinceText(start))
 			return nil
 		}
 		// A saved network does not switch while another one is preferred.
 		// Ask ConnMan to connect the car's AP, then keep polling.
 		if want != "" && time.Now().After(nextJoin) {
 			nextJoin = time.Now().Add(10 * time.Second)
+			joins++
+			t := time.Now()
 			if err := connmanConnect(want); err != nil {
-				logf("wifi: join %q: %v", want, err)
+				logf("wifi: join #%d %q failed after %s: %v", joins, want, sinceText(t), err)
 				st.Set("Wi-Fi join", false, err.Error())
 			} else {
-				logf("wifi: asked ConnMan to join %q", want)
+				logf("wifi: join #%d %q accepted by ConnMan in %s", joins, want, sinceText(t))
 				st.Set("Wi-Fi join", true, "demandé à ConnMan")
 			}
 		}
 		if time.Since(start) > timeout {
-			return fmt.Errorf("wifi: %s not on %q with IPv4 after %s (ssid=%q ip=%q)",
-				iface, want, timeout, ssid, ip)
+			return fmt.Errorf("wifi: %s not on %q with IPv4 after %s (ssid=%q ip=%q, %d join calls)",
+				iface, want, timeout, ssid, ip, joins)
 		}
 		select {
 		case <-ctx.Done():

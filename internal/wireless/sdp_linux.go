@@ -30,9 +30,13 @@ func sdpRFCOMMChannel(addr string, logf func(string, ...any)) (uint8, error) {
 	if err != nil {
 		return 0, fmt.Errorf("sdp l2cap socket: %w", err)
 	}
+	start := time.Now()
 	if err := unix.Connect(fd, &unix.SockaddrL2{PSM: sdpPSM, Addr: bd}); err != nil {
 		unix.Close(fd)
-		return 0, fmt.Errorf("sdp l2cap connect %s: %w", addr, err)
+		return 0, fmt.Errorf("sdp l2cap connect %s psm %d after %s: %w", addr, sdpPSM, sinceText(start), err)
+	}
+	if logf != nil {
+		logf("sdp: l2cap connected to %s psm %d in %s", addr, sdpPSM, sinceText(start))
 	}
 	f := os.NewFile(uintptr(fd), "sdp")
 	if f == nil {
@@ -44,27 +48,31 @@ func sdpRFCOMMChannel(addr string, logf func(string, ...any)) (uint8, error) {
 
 	req := sdpAARequest()
 	if logf != nil {
-		logf("sdp: request %d bytes: %x", len(req), req)
+		logf("sdp: request %d bytes: %s", len(req), hexPreview(req))
 	}
+	t := time.Now()
 	if _, err := f.Write(req); err != nil {
-		return 0, fmt.Errorf("sdp write: %w", err)
+		return 0, fmt.Errorf("sdp write after %s: %w", sinceText(t), err)
 	}
 	buf := make([]byte, 4096)
 	n, err := f.Read(buf)
 	if err != nil {
-		return 0, fmt.Errorf("sdp read: %w", err)
+		return 0, fmt.Errorf("sdp read after %s: %w", sinceText(t), err)
 	}
 	resp := buf[:n]
 	if logf != nil {
-		logf("sdp: response %d bytes: %x", len(resp), resp)
+		logf("sdp: response %d bytes in %s: %s", len(resp), sinceText(t), hexPreview(resp))
 	}
 	if len(resp) < 5 || resp[0] != 0x07 {
-		return 0, fmt.Errorf("sdp: unexpected response %x", resp)
+		return 0, fmt.Errorf("sdp: unexpected response (%d bytes) %s", len(resp), hexPreview(resp))
 	}
 	if ch, ok := rfcommChannelFromSDP(resp); ok {
+		if logf != nil {
+			logf("sdp: Android Auto descriptor carries RFCOMM channel %d", ch)
+		}
 		return ch, nil
 	}
-	return 0, fmt.Errorf("sdp: no RFCOMM channel in response")
+	return 0, fmt.Errorf("sdp: no RFCOMM channel in the %d-byte response", len(resp))
 }
 
 func sdpAARequest() []byte {

@@ -26,15 +26,18 @@ func dialRFCOMM(addr string, channel uint8) (net.Conn, error) {
 		return nil, fmt.Errorf("rfcomm socket: %w", err)
 	}
 	sa := &unix.SockaddrRFCOMM{Addr: bd, Channel: channel}
+	start := time.Now()
 	if err := unix.Connect(fd, sa); err != nil {
 		unix.Close(fd)
-		return nil, fmt.Errorf("rfcomm connect %s channel %d: %w", addr, channel, err)
+		return nil, fmt.Errorf("rfcomm connect %s channel %d after %s: %w", addr, channel, sinceText(start), err)
 	}
 	f := os.NewFile(uintptr(fd), "rfcomm")
 	if f == nil {
 		unix.Close(fd)
 		return nil, fmt.Errorf("rfcomm: os.NewFile failed")
 	}
+	// os.NewFile switches the socket to non-blocking and registers it with the
+	// netpoller, so the deadlines set by handshake work.
 	return &fileConn{File: f}, nil
 }
 

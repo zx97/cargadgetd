@@ -58,6 +58,10 @@ func main() {
 	certInfo := flag.Bool("cert-info", false, "print reversegearhead_probe and exit")
 	flag.Parse()
 
+	// Millisecond timestamps: the wireless log is read to compare phase
+	// durations, and whole seconds hide the interesting gaps.
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
 	if *showVersion {
 		log.Printf("cargadgetd %s (%s)", version, commit)
 		return
@@ -152,6 +156,9 @@ func main() {
 		log.Printf("wireless: Bluetooth name=%q addr=%q channel=%d iface=%s",
 			*wirelessName, *wirelessAddr, *wirelessChannel, *wirelessIface)
 		st := wireless.NewStatus()
+		btName, btAddr, usbName := wireless.LocalNames()
+		st.SetNames(btName, usbName)
+		log.Printf("wireless: car sees bluetooth name=%q addr=%s, usb name=%q", btName, btAddr, usbName)
 		if mat.ExpiresIn < 0 {
 			st.SetStatic("Certificat MD", false, fmt.Sprintf("expiré (expires_in=%ds)", mat.ExpiresIn))
 		} else {

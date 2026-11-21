@@ -16,28 +16,47 @@ import (
 // us the resulting stream.
 type aaProfile struct {
 	conns chan *os.File
+	logf  func(string, ...any)
+}
+
+func (p *aaProfile) log(format string, args ...any) {
+	if p.logf != nil {
+		p.logf(format, args...)
+	}
 }
 
 func (p *aaProfile) NewConnection(device dbus.ObjectPath, fd dbus.UnixFD, props map[string]dbus.Variant) *dbus.Error {
+	p.log("profile: NewConnection from %s fd=%d props=%v", device, int(fd), props)
 	dup, err := unix.Dup(int(fd))
 	if err != nil {
+		p.log("profile: dup fd failed: %v", err)
 		return dbus.MakeFailedError(err)
 	}
 	f := os.NewFile(uintptr(dup), "rfcomm-in")
 	if f == nil {
+		p.log("profile: os.NewFile failed for fd %d", dup)
 		unix.Close(dup)
 		return dbus.MakeFailedError(fmt.Errorf("os.NewFile"))
 	}
 	select {
 	case p.conns <- f:
+		p.log("profile: handed dup fd=%d to the handshake", dup)
 	default:
+		p.log("profile: channel busy, closing fd=%d", dup)
 		_ = f.Close()
 	}
 	return nil
 }
 
-func (p *aaProfile) RequestDisconnection(device dbus.ObjectPath) *dbus.Error { return nil }
-func (p *aaProfile) Release() *dbus.Error                                    { return nil }
+func (p *aaProfile) RequestDisconnection(device dbus.ObjectPath) *dbus.Error {
+	p.log("profile: RequestDisconnection for %s", device)
+	return nil
+}
+
+func (p *aaProfile) Release() *dbus.Error {
+	p.log("profile: Release (BlueZ unregistered the profile)")
+	return nil
+}
 
 var aaServer struct {
 	once  sync.Once
@@ -57,7 +76,7 @@ func ensureAAProfile(logf func(string, ...any)) (<-chan *os.File, error) {
 			return
 		}
 		path := dbus.ObjectPath("/org/cargadgetd/aa")
-		p := &aaProfile{conns: aaServer.conns}
+		p := &aaProfile{conns: aaServer.conns, logf: logf}
 		if err := conn.Export(p, path, "org.bluez.Profile1"); err != nil {
 			aaServer.err = fmt.Errorf("export profile: %w", err)
 			return
@@ -82,6 +101,9 @@ func ensureAAProfile(logf func(string, ...any)) (<-chan *os.File, error) {
 		}
 		err = call()
 		if err != nil {
+			if logf != nil {
+				logf("profile: RegisterProfile channel=8 failed: %v; retrying with an automatic channel", err)
+			}
 			// Channel 8 may be taken; let BlueZ choose one.
 			opts["Channel"] = dbus.MakeVariant(uint16(0))
 			err = call()
@@ -91,7 +113,7 @@ func ensureAAProfile(logf func(string, ...any)) (<-chan *os.File, error) {
 			return
 		}
 		if logf != nil {
-			logf("profile: Android Auto RFCOMM server registered (%s)", aaUUIDText)
+			logf("profile: Android Auto RFCOMM server registered (%s), options=%v", aaUUIDText, opts)
 		}
 	})
 	return aaServer.conns, aaServer.err

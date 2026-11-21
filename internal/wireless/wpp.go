@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"net"
 	"strings"
 )
 
@@ -60,6 +61,40 @@ func writeWPP(w io.Writer, id uint16, payload []byte) error {
 		return err
 	}
 	return nil
+}
+
+// wppStream decodes WPP packets on a single reader goroutine. The handshake
+// loop then selects on packets and on timers, so a socket that cannot carry
+// read deadlines (a blocking RFCOMM file) still cannot wedge the connection
+// attempt. Closing the connection ends the goroutine.
+type wppStream struct {
+	pkts chan wppPacket
+	err  chan error
+}
+
+func newWPPStream(rc net.Conn, logf func(string, ...any)) *wppStream {
+	s := &wppStream{
+		pkts: make(chan wppPacket, 16),
+		err:  make(chan error, 1),
+	}
+	go func() {
+		defer close(s.pkts)
+		for {
+			pkt, err := readWPP(rc)
+			if err != nil {
+				s.err <- err
+				return
+			}
+			select {
+			case s.pkts <- pkt:
+			default:
+				if logf != nil {
+					logf("wpp: reader buffer full, dropped packet id=%d len=%d", pkt.ID, len(pkt.Payload))
+				}
+			}
+		}
+	}()
+	return s
 }
 
 // --- minimal protobuf -------------------------------------------------------

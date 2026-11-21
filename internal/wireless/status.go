@@ -2,6 +2,7 @@ package wireless
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -22,6 +23,14 @@ type Snapshot struct {
 	Error    string
 	WPP      []string
 	WiFiWant string
+	// Next is the one thing the driver should do now, rendered in a large box.
+	Next string
+	// NextKind is "ok", "wait" or "action" and drives the box colour.
+	NextKind string
+	// BluetoothName / USBName are how the head unit names the phone in each
+	// mode; they differ by design and the page says so.
+	BluetoothName string
+	USBName       string
 }
 
 // Status is the live state of the wireless bootstrap. All methods are safe on a
@@ -38,6 +47,8 @@ type Status struct {
 	err         string
 	wpp         []string
 	wifiWant    string
+	btName      string
+	usbName     string
 }
 
 const wppLogMax = 60
@@ -170,6 +181,17 @@ func (s *Status) WiFiWant() string {
 	return s.wifiWant
 }
 
+// SetNames records how the head unit names the phone over Bluetooth and over
+// USB, so the page can point at the right one.
+func (s *Status) SetNames(bt, usb string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.btName, s.usbName = bt, usb
+	s.mu.Unlock()
+}
+
 // Snapshot returns a copy for rendering.
 func (s *Status) Snapshot() Snapshot {
 	if s == nil {
@@ -178,11 +200,13 @@ func (s *Status) Snapshot() Snapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	snap := Snapshot{
-		Phase:    s.phase,
-		Running:  s.running,
-		Started:  s.started,
-		Error:    s.err,
-		WiFiWant: s.wifiWant,
+		Phase:         s.phase,
+		Running:       s.running,
+		Started:       s.started,
+		Error:         s.err,
+		WiFiWant:      s.wifiWant,
+		BluetoothName: s.btName,
+		USBName:       s.usbName,
 	}
 	for _, name := range s.staticOrder {
 		snap.Checks = append(snap.Checks, *s.static[name])
@@ -191,7 +215,44 @@ func (s *Status) Snapshot() Snapshot {
 		snap.Checks = append(snap.Checks, *s.checks[name])
 	}
 	snap.WPP = append(snap.WPP, s.wpp...)
+	snap.Next, snap.NextKind = nextStep(snap)
 	return snap
+}
+
+// nextStep turns the live state into one imperative instruction. The driver
+// should never have to read the check list to know what to do.
+func nextStep(s Snapshot) (string, string) {
+	check := func(name string) (bool, bool) {
+		for _, c := range s.Checks {
+			if c.Name == name {
+				return c.OK, true
+			}
+		}
+		return false, false
+	}
+	name := s.BluetoothName
+	if name == "" {
+		name = "le téléphone"
+	}
+	switch {
+	case !s.Running && s.Error == "":
+		return "Touche « Démarrer » ci-dessous.", "action"
+	case !s.Running && strings.Contains(s.Error, "voiture absente"):
+		return "Allume le contact de la voiture : le téléphone réessaie tout seul dès qu'elle apparaît.", "wait"
+	case !s.Running:
+		return "Touche « Démarrer » pour relancer une tentative.", "action"
+	case s.Phase == "session":
+		return "C'est connecté. Tu peux rouler.", "ok"
+	case s.Phase == "bluetooth" || s.Phase == "profile":
+		if ok, seen := check("Bluetooth appairé"); seen && !ok {
+			return "Appaire d'abord le téléphone à la voiture en Bluetooth.", "action"
+		}
+		return fmt.Sprintf("Sur l'écran de la voiture : Appareils mobiles → « %s » → Android Auto.", name), "action"
+	case s.Phase == "wifi":
+		return "Le téléphone rejoint le Wi-Fi de la voiture : ne touche à rien.", "wait"
+	default:
+		return "Ne touche à rien : le téléphone parle à la voiture.", "wait"
+	}
 }
 
 // Detail is a convenience for building check details.

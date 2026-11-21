@@ -67,6 +67,10 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 func bannerFor(s Snapshot) (string, string) {
 	switch {
 	case s.Error != "" && !s.Running:
+		// A car that is off is the normal case at home, not a failure.
+		if strings.Contains(s.Error, "voiture absente") {
+			return "En attente de la voiture", "wait"
+		}
 		return "Erreur", "ko"
 	case s.Running && s.Phase == "session":
 		return "Android Auto connecté", "ok"
@@ -95,6 +99,14 @@ td{padding:7px 6px;border-bottom:1px solid #2a2f3a;vertical-align:top}
 .name{font-weight:600}
 .detail{color:#9aa3b2;font-size:.85rem}
 .err{background:#4a1d1d;border:1px solid #e74c3c;padding:9px;border-radius:8px;margin-bottom:12px;word-break:break-word}
+.next{padding:14px;border-radius:12px;margin:0 0 12px;border:1px solid #2f4a63;background:#16202c}
+.next .t{font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;color:#9aa3b2;margin-bottom:6px}
+#nextText{font-size:1.15rem;font-weight:700;line-height:1.3}
+.next.ok{background:#12351f;border-color:#2ecc71}
+.next.wait{background:#3a2b10;border-color:#f39c12}
+.next.action{background:#122534;border-color:#3498db}
+.names{margin:0 0 12px;padding:10px;border-radius:8px;background:#0f1620;border:1px solid #2a2f3a;font-size:.9rem}
+.names b{font-weight:700}
 .btns{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap}
 button{flex:1;padding:14px;font-size:1rem;border-radius:10px;border:0;color:#fff}
 .start{background:#2ecc71}.stop{background:#e74c3c}.wifi{background:#3498db}.restart{background:#8e44ad}
@@ -104,6 +116,22 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 
 	banner, cls := bannerFor(snap)
 	fmt.Fprintf(&b, `<div id="banner" class="banner %s">%s</div>`, cls, html.EscapeString(banner))
+
+	fmt.Fprintf(&b, `<div id="next" class="next %s"><div class="t">Quoi faire</div><div id="nextText">%s</div></div>`,
+		html.EscapeString(snap.NextKind), html.EscapeString(snap.Next))
+
+	if snap.BluetoothName != "" || snap.USBName != "" {
+		b.WriteString(`<div class="names">`)
+		if snap.BluetoothName != "" {
+			fmt.Fprintf(&b, `<div>Sans fil, la voiture voit <b>« %s »</b> (nom Bluetooth).</div>`,
+				html.EscapeString(snap.BluetoothName))
+		}
+		if snap.USBName != "" {
+			fmt.Fprintf(&b, `<div>Avec le câble, elle voit <b>« %s »</b> (nom USB).</div>`,
+				html.EscapeString(snap.USBName))
+		}
+		b.WriteString(`<div class="detail">C'est le même téléphone. Le câble ne sert qu'à la toute première association.</div></div>`)
+	}
 
 	state := "arrêté"
 	if snap.Running {
@@ -178,13 +206,18 @@ async function tick(){
   let s;
   try { s = JSON.parse(txt); } catch(e) { return; }
   let text='Arrêté', cls='idle';
-  if (s.Error && !s.Running) { text='Erreur'; cls='ko'; }
+  if (s.Error && !s.Running) { if (s.Error.indexOf('voiture absente')>=0) { text='En attente de la voiture'; cls='wait'; } else { text='Erreur'; cls='ko'; } }
   else if (s.Running && s.Phase==='session') { text='Android Auto connecté'; cls='ok'; }
   else if (s.Running) { text='Connexion…'; cls='wait'; }
   const b=$('banner');
   if(b){ b.textContent=text; b.className='banner '+cls; }
   const p=$('phase');
   if(p){ p.textContent='état : '+(s.Running?'actif':'arrêté')+' · étape : '+(s.Phase||'—'); }
+  const nx=$('next');
+  if(nx){
+    nx.className='next '+(s.NextKind||'wait');
+    const nt=$('nextText'); if(nt) nt.textContent=s.Next||'';
+  }
   const e=$('err');
   if(e){ if(s.Error){ e.textContent=s.Error; e.style.display=''; } else { e.style.display='none'; } }
   const t=$('checks');
