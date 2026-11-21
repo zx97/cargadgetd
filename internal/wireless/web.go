@@ -91,7 +91,14 @@ func usbText(u USBSnapshot) (svc, mode, sess, svcCls, modeCls, sessCls string) {
 		mode = fmt.Sprintf("Mode : accessoire AOA (%s) — la voiture peut parler", u.VendorID)
 		modeCls = "ok"
 	case "ask":
-		mode = fmt.Sprintf("Mode : attente du câble (%s)", u.VendorID)
+		if u.VendorID != "" {
+			mode = fmt.Sprintf("Mode : attente du câble (%s)", u.VendorID)
+		} else {
+			mode = "Mode : attente du câble"
+		}
+		modeCls = "idle"
+	case "inconnu":
+		mode = "Mode : non lisible (configfs root)"
 		modeCls = "idle"
 	default:
 		mode = "Mode : gadget USB absent"
@@ -99,6 +106,9 @@ func usbText(u USBSnapshot) (svc, mode, sess, svcCls, modeCls, sessCls string) {
 	}
 	if u.AccessoryLinked {
 		mode += " · accessoire lié"
+	}
+	if u.HostPresent {
+		mode += " · hôte USB branché"
 	}
 	sess = "Session USB : aucune"
 	sessCls = "idle"
@@ -329,8 +339,10 @@ async function tick(){
   const svcCls=u.ServiceState==='active'?'ok':'ko';
   let modeText='Mode : gadget USB absent', modeCls='ko';
   if(u.Mode==='accessory'){ modeText='Mode : accessoire AOA ('+(u.VendorID||'')+') — la voiture peut parler'; modeCls='ok'; }
-  else if(u.Mode==='ask'){ modeText='Mode : attente du câble ('+(u.VendorID||'')+')'; modeCls='idle'; }
+  else if(u.Mode==='ask'){ modeText=u.VendorID?('Mode : attente du câble ('+u.VendorID+')'):'Mode : attente du câble'; modeCls='idle'; }
+  else if(u.Mode==='inconnu'){ modeText='Mode : non lisible (configfs root)'; modeCls='idle'; }
   if(u.AccessoryLinked) modeText+=' · accessoire lié';
+  if(u.HostPresent) modeText+=' · hôte USB branché';
   const sessText=u.SessionRunning?'Session USB : en cours':'Session USB : aucune';
   setRow('usbSvcDot','usbSvc',svcCls,svcText);
   setRow('usbModeDot','usbMode',modeCls,modeText);

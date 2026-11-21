@@ -35,6 +35,8 @@ type USBSnapshot struct {
 	// SessionRunning is true while a cargadgetd-md session process runs
 	// over FunctionFS (the wireless daemon excluded).
 	SessionRunning bool
+	// HostPresent is true when the launcher last saw a USB host on the cable.
+	HostPresent bool
 	// Log is the tail of the USB daemon log.
 	Log []string
 	// LogPath is where Log came from.
@@ -52,13 +54,22 @@ func USBStatus() USBSnapshot {
 		s.Transport = c
 	}
 	s.ServiceState = unitState("cargadgetd-aoa.service")
-	s.VendorID, s.Mode = gadgetState()
+	vendor, mode := gadgetState()
+	s.VendorID = vendor
 	s.LogPath = usbLogPath()
 	s.Log = tailLines(s.LogPath, 8)
+	// AccessoryLinked and HostPresent when configfs is not readable
+	// (g1 is 0770 root:system after a usb-moded restart): fall back to the
+	// launcher log, which says what it linked and whether a host is seen.
+	if mode == "inconnu" && logMentions(s.Log, "linked accessory") {
+		mode = "ask"
+	}
+	s.Mode = mode
 	// 18d1:2d00 is the accessory mode itself. Before the head unit sends AOA
 	// START the launcher still links accessory.gs2 while keeping the ask ids,
 	// and says so in its log; that is the "ready for the cable" state.
 	s.AccessoryLinked = s.VendorID == "0x18d1" || logMentions(s.Log, "linked accessory")
+	s.HostPresent = lastHostPresent(s.Log)
 	s.SessionRunning = usbSessionRunning()
 	return s
 }
@@ -91,7 +102,9 @@ func gadgetState() (vendor, mode string) {
 		p := filepath.Join("/sys/kernel/config/usb_gadget", e.Name(), "idVendor")
 		b, err := os.ReadFile(p)
 		if err != nil {
-			continue
+			// Configfs gadget dirs are 0770 root:system: the file exists but a
+			// normal user cannot read it. Do not claim the gadget is absent.
+			return "", "inconnu"
 		}
 		vendor = strings.TrimSpace(string(b))
 		switch vendor {
@@ -105,6 +118,20 @@ func gadgetState() (vendor, mode string) {
 		return vendor, mode
 	}
 	return "", "absent"
+}
+
+// lastHostPresent reads the launcher's latest USB-host line: "aoa: USB host
+// present" or "aoa: no USB host; sleeping until the cable is connected".
+func lastHostPresent(lines []string) bool {
+	present := false
+	for _, l := range lines {
+		low := strings.ToLower(l)
+		if !strings.Contains(low, "usb host") {
+			continue
+		}
+		present = strings.Contains(low, "present")
+	}
+	return present
 }
 
 // logMentions reports whether any of lines contains want (case-insensitive).
