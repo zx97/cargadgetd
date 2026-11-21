@@ -48,9 +48,17 @@ func main() {
 
 	// The car names the USB entry after the gadget product string: use the
 	// name the user gave the phone (Bluetooth alias), not hw-release's.
+	// godbus authenticates with the *real* uid, and a setuid helper still has
+	// the user's ruid until becomeRoot, so the bus would reject the query.
+	if os.Geteuid() == 0 {
+		if err := becomeRoot(); err != nil {
+			log.Printf("become root for name lookup: %v", err)
+		}
+	}
 	if bt, _, _ := wireless.LocalNames(); bt != "" {
 		accessoryProductName = bt
 	}
+	log.Printf("accessory product name: %q", accessoryProductName)
 
 	if *btAdapter != "" {
 		if os.Geteuid() != 0 {
