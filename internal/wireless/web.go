@@ -169,9 +169,14 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 // page never reloads (a meta refresh flickered badly on the phone).
 const pageScript = `<script>
 const $=id=>document.getElementById(id);
+let last='';
 async function tick(){
+  let txt;
+  try { txt = await (await fetch('/status',{cache:'no-store'})).text(); } catch(e) { return; }
+  if(txt===last) return;
+  last=txt;
   let s;
-  try { s = await (await fetch('/status',{cache:'no-store'})).json(); } catch(e) { return; }
+  try { s = JSON.parse(txt); } catch(e) { return; }
   let text='Arrêté', cls='idle';
   if (s.Error && !s.Running) { text='Erreur'; cls='ko'; }
   else if (s.Running && s.Phase==='session') { text='Android Auto connecté'; cls='ok'; }

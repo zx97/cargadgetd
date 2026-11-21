@@ -6,10 +6,12 @@ package wireless
 
 import (
 	"fmt"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/cargadgetd/cargadgetd/internal/cfg"
 	"github.com/godbus/dbus/v5"
 )
 
@@ -142,35 +144,92 @@ func (d *Device) Connect() error {
 	return conn.Object(bluezService, d.Path).Call("org.bluez.Device1.Connect", 0).Err
 }
 
-// EnsureAdapter powers the Bluetooth adapter and makes it discoverable so the
-// head unit can find the phone for the first wireless pairing.
-func (d *Device) EnsureAdapter(logf func(string, ...any)) {
-	if logf == nil {
-		logf = func(string, ...any) {}
+// AdapterSetup powers the adapter, disables the discoverable/pairable timeouts
+// and turns both flags on. It must run as root: Sailfish answers
+// org.freedesktop.DBus.Error.AuthFailed to Adapter1 property writes from a
+// normal user session, so the daemon reaches this through the setuid helper.
+func AdapterSetup(adapter dbus.ObjectPath) error {
+	if adapter == "" {
+		return fmt.Errorf("adapter path unknown")
 	}
 	conn, err := dbus.SystemBus()
 	if err != nil {
-		logf("bluetooth: adapter: %v", err)
-		return
+		return fmt.Errorf("system bus: %w", err)
+	}
+	writes := []struct {
+		prop string
+		v    any
+	}{
+		{"Powered", true},
+		// A zero timeout means "no timeout": otherwise BlueZ reverts
+		// Discoverable after DiscoverableTimeout (900 s here, 180 s on
+		// stock BlueZ) and the phone vanishes from the head unit's list.
+		{"DiscoverableTimeout", uint32(0)},
+		{"PairableTimeout", uint32(0)},
+		{"Pairable", true},
+		{"Discoverable", true},
+	}
+	for _, w := range writes {
+		err := conn.Object(bluezService, adapter).
+			Call("org.freedesktop.DBus.Properties.Set", 0,
+				"org.bluez.Adapter1", w.prop, dbus.MakeVariant(w.v)).Err
+		if err != nil {
+			return fmt.Errorf("%s=%v: %s", w.prop, w.v, dbusErrText(err))
+		}
+	}
+	return nil
+}
+
+// dbusErrText names the D-Bus error when its body is empty (Sailfish answers
+// AuthFailed with no message), so the log line stays useful.
+func dbusErrText(err error) string {
+	derr, ok := err.(dbus.Error)
+	if !ok {
+		ptr, isPtr := err.(*dbus.Error)
+		if !isPtr {
+			return err.Error()
+		}
+		derr = *ptr
+	}
+	if len(derr.Body) == 0 || derr.Body[0] == "" {
+		return derr.Name
+	}
+	return fmt.Sprintf("%s: %v", derr.Name, derr.Body[0])
+}
+
+// EnsureAdapter powers the Bluetooth adapter and makes it discoverable so the
+// head unit can find the phone for the first wireless pairing. The D-Bus write
+// needs root, so the setuid gadget helper is used when the direct call is
+// refused.
+func (d *Device) EnsureAdapter(logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
 	}
 	if d.Adapter == "" {
 		logf("bluetooth: adapter path unknown")
 		return
 	}
-	set := func(prop string, v any) {
-		err := conn.Object(bluezService, d.Adapter).
-			Call("org.freedesktop.DBus.Properties.Set", 0,
-				"org.bluez.Adapter1", prop, dbus.MakeVariant(v)).Err
-		if err != nil {
-			logf("bluetooth: adapter %s=%v: %v", prop, v, err)
-			return
+	if err := AdapterSetup(d.Adapter); err != nil {
+		logf("bluetooth: adapter direct: %v", err)
+		if bin := cfg.Get().Gadget.Bin; bin != "" {
+			out, herr := exec.Command(bin, "-bt-adapter", string(d.Adapter)).CombinedOutput()
+			if herr != nil {
+				logf("bluetooth: adapter helper %s: %v (%s)", bin, herr, strings.TrimSpace(string(out)))
+			} else {
+				logf("bluetooth: adapter configured by the root helper")
+			}
+		} else {
+			logf("bluetooth: no gadget binary configured for the root helper")
 		}
-		logf("bluetooth: adapter %s=%v", prop, v)
+	} else {
+		logf("bluetooth: adapter configured")
 	}
-	set("Powered", true)
-	set("Pairable", true)
-	set("Discoverable", true)
 
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		logf("bluetooth: adapter: %v", err)
+		return
+	}
 	var props map[string]dbus.Variant
 	if err := conn.Object(bluezService, d.Adapter).
 		Call("org.freedesktop.DBus.Properties.GetAll", 0, "org.bluez.Adapter1").

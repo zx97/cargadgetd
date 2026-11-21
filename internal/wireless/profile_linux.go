@@ -63,9 +63,15 @@ func ensureAAProfile(logf func(string, ...any)) (<-chan *os.File, error) {
 			return
 		}
 		opts := map[string]dbus.Variant{
+			// BlueZ synthesises the SDP record from these options. Version
+			// adds the BluetoothProfileDescriptorList (attribute 0x0009)
+			// that head units read before offering the Android Auto entry;
+			// Name becomes the ServiceName (0x0100).
+			"Name":                  dbus.MakeVariant("Android Auto"),
 			"Role":                  dbus.MakeVariant("server"),
 			"Service":               dbus.MakeVariant(aaUUIDText),
 			"Channel":               dbus.MakeVariant(uint16(8)),
+			"Version":               dbus.MakeVariant(uint16(0x0100)),
 			"AutoConnect":           dbus.MakeVariant(false),
 			"RequireAuthentication": dbus.MakeVariant(false),
 			"RequireAuthorization":  dbus.MakeVariant(false),

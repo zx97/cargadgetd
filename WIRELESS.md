@@ -13,7 +13,10 @@ sequenceDiagram
     participant HU as Head unit (car)
     participant WiFi as Wi-Fi (ConnMan)
     MD->>BT: find paired device with AA UUID
-    MD->>HU: RFCOMM connect (SDP channel)
+    MD->>BT: register AA RFCOMM server profile (root helper)
+    Note over HU,MD: the HU's list now shows the Android Auto entry
+    HU->>MD: RFCOMM connect to the AA channel
+    MD->>HU: WPP version / info request
     HU->>MD: WPP version / Wi-Fi credentials / TCP endpoint
     MD->>WiFi: join the car AP (SSID from WPP)
     MD->>HU: TCP connect (phone is still the TLS server)
@@ -22,6 +25,12 @@ sequenceDiagram
 
 The phone is the **RFCOMM client** and the **TCP client**, but the **TLS
 server**. That is the Android Auto wireless layout; do not swap the TLS roles.
+
+Two RFCOMM directions exist in the wild. The daemon registers an Android Auto
+**server** profile (UUID `4de17a00-…`, RFCOMM channel 8, profile version 1.0) so
+the head unit discovers the phone as an Android Auto device and connects to it;
+if nothing arrives within 20 s it falls back to the classic client-only path
+(dial the HU channel learned over SDP).
 
 ## Running
 
@@ -53,6 +62,30 @@ the car's first-time trust step.
 The status page shows the adapter state (Powered / Discoverable / Pairable) and
 the device properties (Bonded / Trusted / ServicesResolved).
 
+## Root-only D-Bus calls (Sailfish)
+
+Sailfish answers `org.freedesktop.DBus.Error.AuthFailed` (with an empty message)
+to `Adapter1` property writes coming from a normal user session, and ConnMan
+refuses `Service.Connect` the same way. The daemon therefore asks the setuid
+`cargadgetd-gadget` helper for both:
+
+```sh
+cargadgetd-gadget -bt-adapter /org/bluez/hci1   # Powered, no timeouts, Pairable, Discoverable
+cargadgetd-gadget -wifi-connect MULTIVAN        # ConnMan Service.Connect as root
+```
+
+`DiscoverableTimeout` is set to 0 ("stay discoverable") because BlueZ otherwise
+clears the flag after its timeout and the phone disappears from the head unit's
+list mid-session. Both helpers exit immediately; the daemon keeps running as the
+normal user.
+
+To check from another machine that the phone advertises the service:
+
+```
+bluetoothctl --timeout 12 scan on
+bluetoothctl info <phone-address>   # expects 4de17a00-… under "Vendor specific"
+```
+
 ## Status page
 
 The page shows one green/red line per prerequisite:
@@ -72,7 +105,9 @@ updated build and resets the controller) without a shell. The daemon keeps
 running so the page stays available.
 
 Logs: `~/wireless.log` (wireless daemon) and `~/cargadgetd.log` (USB daemon).
-The status page lists the failing check and the raw WPP exchange.
+The status page lists the failing check and the raw WPP exchange. It polls
+`/status` once a second and patches the DOM in place, so the page never reloads
+or flickers (a `meta refresh` did, badly, on the phone).
 
 ## Wi-Fi selection
 

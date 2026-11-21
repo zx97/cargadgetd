@@ -29,6 +29,7 @@ import (
 	"github.com/cargadgetd/cargadgetd/internal/ffs"
 	"github.com/cargadgetd/cargadgetd/internal/usbcable"
 	"github.com/cargadgetd/cargadgetd/internal/wireless"
+	"github.com/godbus/dbus/v5"
 )
 
 func main() {
@@ -42,7 +43,21 @@ func main() {
 	aoaWait := flag.Bool("aoa", false, "wait for AOA START (Android Auto), then bind the accessory gadget")
 	aoaService := flag.String("aoa-service", "", "start, stop, or restart cargadgetd-aoa.service (setuid)")
 	wifiConnect := flag.String("wifi-connect", "", "connect a saved Wi-Fi service (setuid root) and exit")
+	btAdapter := flag.String("bt-adapter", "", "power and expose a BlueZ adapter, e.g. /org/bluez/hci1 (setuid root) and exit")
 	flag.Parse()
+
+	if *btAdapter != "" {
+		if os.Geteuid() != 0 {
+			log.Fatal("gadgetctl -bt-adapter needs root (install setuid RPM or use devel-su)")
+		}
+		if err := becomeRoot(); err != nil {
+			log.Fatalf("become root: %v", err)
+		}
+		if err := wireless.AdapterSetup(dbus.ObjectPath(*btAdapter)); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 
 	if *wifiConnect != "" {
 		if os.Geteuid() != 0 {
