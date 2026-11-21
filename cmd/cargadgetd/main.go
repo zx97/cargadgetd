@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -11,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +32,7 @@ import (
 	aassl "github.com/cargadgetd/cargadgetd/internal/ssl"
 	"github.com/cargadgetd/cargadgetd/internal/usbcable"
 	"github.com/cargadgetd/cargadgetd/internal/usbgadget"
+	"github.com/cargadgetd/cargadgetd/internal/wireless"
 )
 
 // Set by release builds via -ldflags.
@@ -44,6 +47,13 @@ func main() {
 	certDirFlag := flag.String("certs", "", "reversegearhead.so path (default: daemon.certs)")
 	configPath := flag.String("config", "", "YAML config file (default: search path after compiled defaults)")
 	autoAV := flag.Bool("auto-av", true, "open AV channels and stream livevid after SDR")
+	wirelessFlag := flag.Bool("wireless", false, "connect to a paired head unit over Bluetooth/Wi-Fi instead of USB")
+	wirelessName := flag.String("wireless-name", "", "paired head unit Bluetooth name (default: the paired device advertising the Android Auto UUID)")
+	wirelessAddr := flag.String("wireless-addr", "", "paired head unit Bluetooth address")
+	wirelessChannel := flag.Int("wireless-channel", 0, "head unit AA RFCOMM channel (0 = discover over SDP)")
+	wirelessSSID := flag.String("wireless-ssid", "", "require this Wi-Fi SSID (default: the one from the head unit)")
+	wirelessIface := flag.String("wireless-iface", "wlan0", "Wi-Fi interface")
+	wirelessWeb := flag.Int("wireless-web", 9288, "wireless status page port (127.0.0.1)")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	certInfo := flag.Bool("cert-info", false, "print reversegearhead_probe and exit")
 	flag.Parse()
@@ -118,10 +128,10 @@ func main() {
 	}
 	log.Printf("control on %s %s", cn, ca)
 
-	serve := func(rw io.ReadWriteCloser, peer string) {
+	serve := func(rw io.ReadWriteCloser, peer string, usbBulk bool) {
 		defer rw.Close()
 		log.Printf("HU connected from %s", peer)
-		if strings.HasPrefix(listen, "ffs://") {
+		if usbBulk {
 			on, src, raw := usbcable.Probe()
 			log.Printf("handshake: vbus_online=%v src=%s raw=%q", on, src, raw)
 		}
@@ -132,10 +142,35 @@ func main() {
 		}
 		defer ssl.Close()
 		md := session.NewMD(rw, ssl, log.Default())
-		md.SetUSBBulk(strings.HasPrefix(listen, "ffs://"))
+		md.SetUSBBulk(usbBulk)
 		mdMu.md = md
 		defer func() { mdMu.md = nil }()
-		runSession(md, *autoAV, strings.HasPrefix(listen, "ffs://"))
+		runSession(md, *autoAV, usbBulk)
+	}
+
+	if *wirelessFlag {
+		log.Printf("wireless: Bluetooth name=%q addr=%q channel=%d iface=%s",
+			*wirelessName, *wirelessAddr, *wirelessChannel, *wirelessIface)
+		st := wireless.NewStatus()
+		ctl := wireless.NewController(wireless.Options{
+			Name:      *wirelessName,
+			Address:   *wirelessAddr,
+			Channel:   uint8(*wirelessChannel),
+			Interface: *wirelessIface,
+			SSID:      *wirelessSSID,
+			Logf:      log.Printf,
+		}, st, func(conn net.Conn) {
+			serve(conn, "wireless", false)
+		})
+		go ctl.Run(context.Background())
+		addr := fmt.Sprintf("127.0.0.1:%d", *wirelessWeb)
+		go func() {
+			log.Printf("wireless status: http://%s/", addr)
+			if err := http.ListenAndServe(addr, st.Handler(ctl.Start, ctl.Stop, ctl.JoinWiFi)); err != nil {
+				log.Printf("wireless status http: %v", err)
+			}
+		}()
+		select {}
 	}
 
 	if strings.HasPrefix(listen, "ffs://") {
@@ -186,7 +221,7 @@ func main() {
 				case <-stop:
 				}
 			}()
-			serve(eps, "usb-ffs:"+dir)
+			serve(eps, "usb-ffs:"+dir, true)
 			close(stop)
 			wasActive := eps.Active()
 			_ = eps.Close()
@@ -235,7 +270,7 @@ func main() {
 			log.Printf("accept: %v", err)
 			continue
 		}
-		go serve(conn, conn.RemoteAddr().String())
+		go serve(conn, conn.RemoteAddr().String(), false)
 	}
 }
 
