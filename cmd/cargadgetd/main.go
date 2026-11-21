@@ -154,6 +154,17 @@ func main() {
 		md := session.NewMD(rw, ssl, log.Default())
 		md.SetUSBBulk(usbBulk)
 		md.SetLocalBluetooth(btAddr, btName)
+		md.SetDeviceInfo(btName, "Jolla")
+		if usbBulk {
+			// Stock Android Auto also connects the head unit's Bluetooth link
+			// during the session (its car-Bluetooth service). That active link
+			// is what lets the HU merge its USB device entry with the Bluetooth
+			// bond. Give AOA a couple of seconds to settle first.
+			go func() {
+				time.Sleep(2 * time.Second)
+				wireless.ConnectHeadUnit("", 3, log.Printf)
+			}()
+		}
 		mdMu.md = md
 		defer func() { mdMu.md = nil }()
 		runSession(md, *autoAV, usbBulk)

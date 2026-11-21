@@ -103,6 +103,8 @@ type MD struct {
 	btAnnounced  atomic.Bool
 	localBTAddr  string
 	localBTName  string
+	deviceName   string
+	deviceBrand  string
 	videoW       int
 	videoH       int
 	videoMW      int // total margin_width (both sides)
@@ -216,6 +218,16 @@ func (m *MD) SetUSBBulk(v bool) {
 func (m *MD) SetLocalBluetooth(addr, name string) {
 	m.mu.Lock()
 	m.localBTAddr, m.localBTName = addr, name
+	m.mu.Unlock()
+}
+
+// SetDeviceInfo sets the name and brand the head unit sees in the service
+// discovery request (device_name=4, device_brand=5). Stock Android sends the
+// phone's user-visible name; cargadgetd used to send "linux"/"cargadgetd",
+// which some head units display in their phone details.
+func (m *MD) SetDeviceInfo(name, brand string) {
+	m.mu.Lock()
+	m.deviceName, m.deviceBrand = name, brand
 	m.mu.Unlock()
 }
 
@@ -750,11 +762,22 @@ func (m *MD) handle(channel uint8, flags uint8, payload []byte) error {
 
 	case MsgAuthComplete:
 		m.log.Printf("auth complete")
-		// AACS: MD sends ServiceDiscoveryRequest
+		// AACS: MD sends ServiceDiscoveryRequest.
+		// device_name=4, device_brand=5 (aap_protobuf). Send the name the user
+		// gave the phone, not "linux"/"cargadgetd".
+		m.mu.Lock()
+		name, brand := m.deviceName, m.deviceBrand
+		m.mu.Unlock()
+		if name == "" {
+			name = "cargadgetd"
+		}
+		if brand == "" {
+			brand = "linux"
+		}
 		req := []byte{}
-		// protobuf: manufacturer=5 "cargadgetd", model=4 "linux"
-		req = append(req, encodeProtoString(5, "cargadgetd")...)
-		req = append(req, encodeProtoString(4, "linux")...)
+		req = append(req, encodeProtoString(4, name)...)
+		req = append(req, encodeProtoString(5, brand)...)
+		m.log.Printf("SDR request device_name=%q device_brand=%q", name, brand)
 		if err := m.sendEnc(0, 0, MsgServiceDiscoveryRequest, req); err != nil {
 			return err
 		}
@@ -839,7 +862,10 @@ func (m *MD) handleChannel(channel uint8, flags uint8, msgType uint16, body, ful
 			m.emit(Event{Type: "bluetooth_pairing", Channel: channel, Payload: append([]byte{}, full...)})
 			return nil
 		}
-		return m.unhandled("bluetooth", channel, msgType, body)
+		// VW MIB3 answers the pairing request with a bare 0x00ff (no body);
+		// most head units answer 0x8002. Log it, never fail the session on it.
+		m.log.Printf("bluetooth: head unit replied id=0x%04x len=%d body=%x", msgType, len(body), body)
+		return nil
 	case m.InputCh:
 		switch msgType {
 		case InputEvent:
@@ -1392,24 +1418,35 @@ func (m *MD) sendBluetoothPairing() {
 		m.log.Printf("bluetooth: open channel %d: %v", ch, err)
 		return
 	}
-	// The head unit advertises the pairing methods it supports (A2DP, HFP);
-	// announce once per method, and once with NONE when it advertises none.
-	if len(methods) == 0 {
-		methods = []uint32{0}
+	// pairing_method is not a profile: the real enum is OOB(1),
+	// NUMERIC_COMPARISON(2), PASSKEY_ENTRY(3), PIN(4). Stock Android Auto picks
+	// NUMERIC_COMPARISON, then PIN, and ignores OOB. Sending 4 first (as we did)
+	// made the VW answer a bare 0x00ff instead of 0x8002.
+	preferred := []uint32{2, 4}
+	supported := map[uint32]bool{}
+	for _, mth := range methods {
+		supported[mth] = true
 	}
-	seen := map[uint32]bool{}
-	for _, method := range methods {
-		if seen[method] {
-			continue
+	method := uint32(0)
+	found := false
+	for _, want := range preferred {
+		if supported[want] {
+			method = want
+			found = true
+			break
 		}
-		seen[method] = true
-		body := bluetoothPairingBody(addr, method)
-		if err := m.sendEnc(ch, frame.FlagSpecific, MsgBluetoothPairingRequest, body); err != nil {
-			m.log.Printf("bluetooth: pairing request (method %d) on channel %d: %v", method, ch, err)
-			return
-		}
-		m.log.Printf("bluetooth: pairing request sent on channel %d address=%s name=%q method=%d", ch, addr, name, method)
 	}
+	if !found {
+		m.log.Printf("bluetooth: car advertises %v but none of NUMERIC_COMPARISON/PIN, not sending a pairing request", methods)
+		return
+	}
+	body := bluetoothPairingBody(addr, method)
+	if err := m.sendEnc(ch, frame.FlagSpecific, MsgBluetoothPairingRequest, body); err != nil {
+		m.log.Printf("bluetooth: pairing request on channel %d: %v", ch, err)
+		return
+	}
+	m.log.Printf("bluetooth: pairing request sent on channel %d address=%s name=%q method=%d (NUMERIC_COMPARISON=2, PIN=4; car advertised %v)",
+		ch, addr, name, method, methods)
 }
 
 func channelMedia(b []byte) []byte {

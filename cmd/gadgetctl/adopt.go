@@ -50,6 +50,10 @@ type linkSnap struct {
 	Target string `json:"target"`
 }
 
+// accessoryProductName, when set by main, overrides the gadget product string
+// for the accessory session: the head unit lists the phone by that string.
+var accessoryProductName string
+
 // identityFiles are snapshotted and restored with the ask gadget.
 // An empty val is left as the phone set it. A Pixel comes back from AOA
 // START as 18d1:2d00 still named Google / Pixel / its real serial. Replacing
@@ -265,6 +269,19 @@ func writeAccessoryIdentity(gadget string) error {
 		p := filepath.Join(gadget, id.rel)
 		if err := os.WriteFile(p, []byte(id.val+"\n"), 0644); err != nil {
 			return fmt.Errorf("write %s: %w", id.rel, err)
+		}
+	}
+	// The head unit names the USB entry after the gadget product string, which
+	// usb-moded builds from hw-release ("Jolla Jolla Phone (2026)"). The caller
+	// sets accessoryProductName to the name the user gave the phone (Bluetooth
+	// alias) so the wired and wireless entries carry the same, expected name.
+	// It stays empty in tests, which keeps the phone's own strings.
+	if accessoryProductName != "" {
+		p := filepath.Join(gadget, "strings/0x409/product")
+		if err := os.WriteFile(p, []byte(accessoryProductName+"\n"), 0644); err != nil {
+			log.Printf("product string %q: %v", accessoryProductName, err)
+		} else {
+			log.Printf("accessory product string set to %q (Bluetooth alias)", accessoryProductName)
 		}
 	}
 	man := readTrim(filepath.Join(gadget, "strings/0x409/manufacturer"))

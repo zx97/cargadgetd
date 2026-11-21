@@ -46,6 +46,12 @@ func main() {
 	btAdapter := flag.String("bt-adapter", "", "power and expose a BlueZ adapter, e.g. /org/bluez/hci1 (setuid root) and exit")
 	flag.Parse()
 
+	// The car names the USB entry after the gadget product string: use the
+	// name the user gave the phone (Bluetooth alias), not hw-release's.
+	if bt, _, _ := wireless.LocalNames(); bt != "" {
+		accessoryProductName = bt
+	}
+
 	if *btAdapter != "" {
 		if os.Geteuid() != 0 {
 			log.Fatal("gadgetctl -bt-adapter needs root (install setuid RPM or use devel-su)")
