@@ -193,8 +193,29 @@ The status page lists the failing check and the raw WPP exchange. It polls
 `/status` once a second and patches the DOM in place, so the page never reloads
 or flickers (a `meta refresh` did, badly, on the phone).
 
-## Reading the log
+### WPP, verified against Android Auto 18.1
 
+The stock client (from the gearhead APK) uses exactly the framing cargadgetd
+does, and the same ids:
+
+| Framing | value |
+| --- | --- |
+| header | 2-byte big-endian payload length, 2-byte big-endian message type |
+| max length | 1024 |
+| first packet (phone → HU) | `WifiInfoRequest` (2), sent as soon as RFCOMM connects |
+| ids | 1 Start, 2 InfoRequest, 3 InfoResponse, 4 VersionRequest, 5 VersionResponse, 6 ConnectStatus, 7 StartResponse, 8 Ping, 9 PingResponse, 10 ConnectionRejection, 11 SetupInfo |
+
+The only behavioural difference: the stock client retries `WifiInfoRequest`
+**twice** and then closes the socket and restarts WPP, while cargadgetd used to
+retry forever. Silent retries hid the real cause — a car that answers nothing is
+usually on another RFCOMM service than the one we dialled — so the attempt now
+fails with `no WifiInfoResponse after 2 retries`.
+
+`pairing_method` on the Bluetooth channel is not a profile: the real enum is
+OOB=1, NUMERIC_COMPARISON=2, PASSKEY_ENTRY=3, PIN=4, and stock Android picks
+NUMERIC_COMPARISON then PIN (never OOB).
+
+## Reading the log
 Every attempt is bounded and self-documenting: timestamps carry milliseconds and
 each phase logs its duration, so one attempt can be read top to bottom without a
 sniffer.

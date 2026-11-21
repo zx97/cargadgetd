@@ -298,6 +298,7 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		endpoint         string
 		ssid, key, bssid string
 		security         uint64
+		retries          int
 	)
 	// A raw RFCOMM socket opened with os.NewFile may stay a blocking file whose
 	// SetReadDeadline does nothing; a reader goroutine plus explicit timers keeps
@@ -401,9 +402,17 @@ waitLoop:
 			}
 		case <-time.After(wait):
 			if time.Since(idleSince) > 10*time.Second {
+				// Stock Android Auto retries the Wi-Fi info request twice, then
+				// closes the socket and restarts WPP. More retries hide the real
+				// problem: a car that never answers is usually on a different
+				// RFCOMM channel than the one we are talking to.
+				if retries >= 2 {
+					return nil, fmt.Errorf("wpp: no WifiInfoResponse after %d retries (wrong RFCOMM service on this channel?)", retries)
+				}
 				if err := send(wppInfoRequest, nil, "info request, retry"); err != nil {
 					return nil, err
 				}
+				retries++
 				idleSince = time.Now()
 			}
 		case <-ctx.Done():
