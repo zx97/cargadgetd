@@ -264,6 +264,10 @@ func humanBluetoothError(err error) error {
 		strings.Contains(s, "page timeout"),
 		strings.Contains(s, "connection timed out"):
 		return fmt.Errorf("voiture absente : Bluetooth injoignable (contact allumé ?)")
+	case strings.Contains(s, "device or resource busy"):
+		return fmt.Errorf("canal RFCOMM occupé par une session précédente : nouvelle tentative au prochain cycle")
+	case strings.Contains(s, "connection refused"):
+		return fmt.Errorf("aucun service Android Auto sur ce canal : nouvelle tentative au prochain cycle")
 	}
 	return err
 }
