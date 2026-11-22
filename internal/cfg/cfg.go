@@ -61,6 +61,11 @@ type Video struct {
 	FrameMs int
 	// Live enables the live RGBA encoder. false skips the encode loop.
 	Live bool
+	// BitrateKbps is the CBR target. 0 follows the frame-size budget (about
+	// 4.8 Mbps at 30fps). Some head units reboot or drop the session under a
+	// heavy stream, so the rate is a user setting: 1500 kbps keeps text and map
+	// lines crisp and cuts the keyframe bursts that stress a car decoder.
+	BitrateKbps int
 }
 
 type Audio struct {
@@ -139,6 +144,7 @@ func Default() *Config {
 			ConfigIndex: -1,
 			FrameMs:     33,
 			Live:        true,
+			BitrateKbps: 0,
 		},
 		Audio: Audio{
 			Enabled:     true,

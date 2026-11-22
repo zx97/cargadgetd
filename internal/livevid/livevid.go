@@ -59,7 +59,11 @@ type Options struct {
 	// Bitrate is a kbps hint for hardware CBR. At or below 1000 kbps it
 	// leaves the USB frame budget (~20KB/frame). A higher hint only raises.
 	Bitrate int
-	Paint   func(*image.RGBA, time.Time)
+	// TargetBps, when > 0, replaces both the frame-budget target and the
+	// ceiling: the operator asked for this exact CBR rate (video.bitrate_kbps).
+	// A car whose decoder reboots under a heavy stream is the reason it exists.
+	TargetBps int
+	Paint     func(*image.RGBA, time.Time)
 	// Encoder is "droidmedia" (Sailfish HAL) or "software" (x264).
 	Encoder string
 }
@@ -78,13 +82,17 @@ func New(opts Options) (*Renderer, error) {
 	if opts.Height <= 0 {
 		opts.Height = DefaultHeight
 	}
+	bps := hwBitrate(opts.Width, opts.Height, opts.FPS, opts.Bitrate)
+	if opts.TargetBps > 0 {
+		bps = clampBps(opts.TargetBps)
+	}
 	r := &Renderer{
 		rgba:    image.NewRGBA(image.Rect(0, 0, opts.Width, opts.Height)),
 		w:       opts.Width,
 		h:       opts.Height,
 		fps:     opts.FPS,
 		bitrate: opts.Bitrate,
-		bps:     hwBitrate(opts.Width, opts.Height, opts.FPS, opts.Bitrate),
+		bps:     bps,
 		paint:   opts.Paint,
 		want:    opts.Encoder,
 	}

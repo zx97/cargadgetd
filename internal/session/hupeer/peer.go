@@ -28,6 +28,8 @@ type Peer struct {
 	btMethods   []uint32
 	// SkipVideoAck, when set, receives video but does not MediaAck (n-ACK stall).
 	SkipVideoAck atomic.Bool
+	// byeByeResp counts the ByeByeResponse frames the phone sent back.
+	byeByeResp atomic.Int32
 
 	mu    sync.Mutex
 	sendQ chan peerOut
@@ -252,6 +254,9 @@ func (p *Peer) Run() error {
 		case session.MsgPingResponse:
 			// ignore
 
+		case session.MsgByeByeResponse:
+			p.byeByeResp.Add(1)
+
 		case session.MsgAudioFocusRequest:
 			p.log.Printf("hu: audio focus request body=%x", body)
 			resp := frame.PutU16(nil, session.MsgAudioFocusResponse)
@@ -332,6 +337,17 @@ func (p *Peer) onChannel(ch uint8, msgType uint16, body, full []byte) error {
 	}
 	return nil
 }
+
+// SendByeBye asks the phone to end the projection, as a car does when the
+// driver leaves Android Auto.
+func (p *Peer) SendByeBye(reason int) error {
+	msg := frame.PutU16(nil, session.MsgByeByeRequest)
+	msg = append(msg, 0x08, byte(reason))
+	return p.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, msg)
+}
+
+// ByeByeResponses is how many ByeByeResponse frames the phone sent.
+func (p *Peer) ByeByeResponses() int { return int(p.byeByeResp.Load()) }
 
 // SendMediaAck sends a MediaAck on ch (session=0). Used to release an n-ACK stall.
 func (p *Peer) SendMediaAck(ch uint8) error {

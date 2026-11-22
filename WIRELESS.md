@@ -272,6 +272,56 @@ RFCOMM channel (connected to another service) or of a car that wants the phone
 to wait: the SDP channel lookup above it tells which case applies.
 
 
+## When the car ends the session
+
+A projection can end in four ways, and the log names which one happened. Only
+the first is ours to fix; the others are the car deciding.
+
+```mermaid
+flowchart TD
+    S["session ready (SDR received)"] --> P{"who stops?"}
+    P -->|car leaves AA| B["bye-bye (reason=1, user selection)"]
+    B --> B2["ByeByeResponse sent, session closed"]
+    P -->|car reboots / link dies| Q["no frame for SilentHU (20 s)"]
+    Q --> Q2["session: head unit silent — ending the session"]
+    P -->|phone stops| R["media tx error / stop"]
+    P -->|socket closes| T["session: EOF / read: connection …"]
+```
+
+| Log line | Meaning |
+| --- | --- |
+| `head unit bye-bye (reason=N, …) — acknowledging` | the car asked to end the projection (`ByeByeRequest`, msg `0x000f`); reasons are `1 user selection`, `2 device switch`, `3/4 not supported`, `5 probe`. The daemon answers with `ByeByeResponse` (`0x0010`) before closing, which is what a real phone does — an unanswered bye-bye leaves the car waiting |
+| `session: head unit silent for 20s — ending the session` | the car stopped sending anything (it rebooted, or the link dropped). Without this check the socket stays half-open and a phone pushes frames into it for minutes, never retrying: the "it worked once and never again" state |
+| `session: read unblocked after N frames: …` | the reason above, reported instead of the deadline error used to unblock the read |
+| `video catch-up: skipped N ticks` | the send pipe is stalled; with the above it should no longer be seen for minutes |
+
+`session.SilentHU` (20 s) is the silence budget: the head unit pings about once
+a second, so only a dead car trips it.
+
+## Video bitrate
+
+`video.bitrate_kbps` pins the CBR target. `0` keeps the frame-size budget
+(about 4.8 Mbps at 30 fps, keyframes around 450 KB). A head unit whose decoder
+reboots under a heavy stream needs a lower rate; `1500` is the project's own
+"crisp" floor and cuts the keyframe bursts to roughly a third.
+
+```yaml
+video:
+    encoder: droidmedia
+    size: 1280x720
+    bitrate_kbps: 1500
+```
+
+The daemon logs the value it actually uses on every session:
+
+```
+video: CBR target 1.5 Mbps (video.bitrate_kbps=1500)
+large video AU 143210B
+```
+
+`large video AU` appears above 48 KB, i.e. for keyframes and scene changes: it
+is the quickest way to see whether the burst is still heavy.
+
 ## Wi-Fi selection
 
 Two sources, in order:

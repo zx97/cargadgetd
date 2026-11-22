@@ -587,11 +587,17 @@ func runSession(md *session.MD, autoAV, usbPace bool) {
 		if !ui.WaitLoad(2 * time.Minute) {
 			log.Printf("shell: plugin load timed out; opening encoder anyway")
 		}
-		live, err := livevid.New(livevid.Options{Width: vw, Height: vh, FPS: fps, Bitrate: 400, Paint: paint, Encoder: conf.Video.Encoder})
+		live, err := livevid.New(livevid.Options{
+			Width: vw, Height: vh, FPS: fps, Bitrate: 400,
+			// video.bitrate_kbps pins the CBR rate; 0 keeps the frame budget.
+			TargetBps: conf.Video.BitrateKbps * 1000,
+			Paint:     paint, Encoder: conf.Video.Encoder,
+		})
 		if err != nil {
 			log.Printf("livevid: %v", err)
 			return
 		}
+		log.Printf("video: CBR target %.1f Mbps (video.bitrate_kbps=%d)", float64(live.Bitrate())/1e6, conf.Video.BitrateKbps)
 		defer live.Close()
 		log.Printf("live video: %dx%d ui=%dx%d pad=%d,%d @ %dfps encoder=%s cbr=%d (encode every frame)", vw, vh, cw, ch, ox, oy, fps, live.EncoderName(), live.Bitrate())
 

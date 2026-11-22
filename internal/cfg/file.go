@@ -33,6 +33,7 @@ type fileVideo struct {
 	ConfigIndex *int    `yaml:"config_index"`
 	FrameMs     *int    `yaml:"frame_ms"`
 	Live        *bool   `yaml:"live"`
+	BitrateKbps *int    `yaml:"bitrate_kbps"`
 }
 
 type fileAudio struct {
@@ -119,6 +120,9 @@ func (f fileConfig) merge(dst *Config) {
 		}
 		if v.Live != nil {
 			dst.Video.Live = *v.Live
+		}
+		if v.BitrateKbps != nil {
+			dst.Video.BitrateKbps = *v.BitrateKbps
 		}
 	}
 	if f.Audio != nil {

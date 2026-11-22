@@ -53,6 +53,18 @@ func hwBitrate(w, h, fps, hintKBPS int) int {
 	return bps
 }
 
+// clampBps keeps an explicit target inside what the hardware encoder and the
+// link can actually do.
+func clampBps(bps int) int {
+	if bps < minBps {
+		return minBps
+	}
+	if bps > 6_000_000 {
+		return 6_000_000
+	}
+	return bps
+}
+
 // stepDown drops one quarter, but not below floor (and never below minBps).
 func stepDown(bps, floor int) int {
 	if bps <= 0 {

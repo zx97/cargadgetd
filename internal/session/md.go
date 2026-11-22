@@ -32,6 +32,12 @@ const (
 	MsgVoiceSessionRequest      = 0x0011
 	MsgAudioFocusRequest        = 0x0012
 	MsgAudioFocusResponse       = 0x0013
+	// ByeByeRequest / ByeByeResponse: the head unit ends the projection (user
+	// left Android Auto, device switch, unsupported). It waits for the response
+	// before closing the socket, so an unanswered ByeBye looks like a hung
+	// phone to the car.
+	MsgByeByeRequest  = 0x000f
+	MsgByeByeResponse = 0x0010
 )
 
 // Media / input (channel-specific).
@@ -167,6 +173,15 @@ type MD struct {
 	audioFocusGrant atomic.Bool
 
 	audioUnderflowN atomic.Uint64
+	// failErr keeps the reason fail() was called, so the reader can report it
+	// instead of the deadline error used to unblock it.
+	failMu  sync.Mutex
+	failErr error
+	// lastInbound is the unix-nano time of the last frame read from the car.
+	// The car pings about once a second, so a long silence means it rebooted or
+	// dropped the link; the watchdog then ends the session instead of pushing
+	// frames into a dead socket for minutes.
+	lastInbound atomic.Int64
 }
 
 type outMsg struct {
@@ -234,9 +249,64 @@ func (m *MD) SetDeviceInfo(name, brand string) {
 // Run drives the MD side until the connection fails.
 func (m *MD) Run() error {
 	go m.writer()
+	go m.watchSilence()
 	err := m.reader()
 	m.doneOnce.Do(func() { close(m.done) }) // stop writer — one leaked per session otherwise
 	return err
+}
+
+// SilentHU is how long the car may stay completely silent before the session is
+// considered dead. The head unit pings about once a second, so this only trips
+// when it has rebooted or lost the link. A variable so tests can shorten it.
+var SilentHU = 20 * time.Second
+
+// watchSilence ends a session whose peer stopped talking. Without it a head
+// unit that reboots in the middle of a projection leaves the phone in a zombie
+// session for as long as the socket stays half-open, and the daemon then never
+// retries — the state that looks like "it worked once and never again".
+func (m *MD) watchSilence() {
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-tick.C:
+		}
+		last := m.lastInbound.Load()
+		if last == 0 {
+			continue
+		}
+		select {
+		case <-m.ready:
+		default:
+			continue // still in the handshake; the car may be slow to start
+		}
+		if d := time.Since(time.Unix(0, last)); d > SilentHU {
+			m.log.Printf("session: head unit silent for %v — ending the session", d.Round(time.Second))
+			m.fail(ErrHeadUnitSilent)
+			return
+		}
+	}
+}
+
+// byeByeText names the ByeByeReason the car sends (aap_protobuf Control).
+func byeByeText(reason int) string {
+	switch reason {
+	case 0:
+		return "no reason given"
+	case 1:
+		return "user selection"
+	case 2:
+		return "device switch"
+	case 3:
+		return "not supported"
+	case 4:
+		return "not currently supported"
+	case 5:
+		return "probe supported"
+	}
+	return "unknown reason"
 }
 
 func (m *MD) writer() {
@@ -554,9 +624,18 @@ var (
 	ErrNoAudioCredit = fmt.Errorf("no audio credit")
 	errSendQueueFull = fmt.Errorf("send queue full")
 	errSendTimeout   = fmt.Errorf("send timeout")
+	// ErrHeadUnitSilent: the car stopped talking mid-session (reboot, link loss).
+	ErrHeadUnitSilent = fmt.Errorf("head unit silent")
+	// ErrHeadUnitByeBye: the car asked to end the projection.
+	ErrHeadUnitByeBye = fmt.Errorf("head unit said bye-bye")
 )
 
 func (m *MD) fail(err error) {
+	m.failMu.Lock()
+	if m.failErr == nil {
+		m.failErr = err
+	}
+	m.failMu.Unlock()
 	select {
 	case m.errc <- err:
 	default:
@@ -566,9 +645,21 @@ func (m *MD) fail(err error) {
 	if eps, ok := m.rw.(endpointStopper); ok {
 		eps.Shutdown(err)
 	}
+	// TCP: a read with no deadline would keep Run() blocked for minutes after
+	// the peer went away, so expire it now.
+	if rd, ok := m.rw.(interface{ SetReadDeadline(time.Time) error }); ok {
+		_ = rd.SetReadDeadline(time.Now())
+	}
 }
 
 // enqueue writes via the writer goroutine so the reader never blocks on net.Pipe.
+// failure returns the reason the session was failed, if any.
+func (m *MD) failure() error {
+	m.failMu.Lock()
+	defer m.failMu.Unlock()
+	return m.failErr
+}
+
 func (m *MD) enqueue(channel, flags uint8, payload []byte) error {
 	return m.enqueueTimeout(channel, flags, payload, 3*time.Second)
 }
@@ -640,11 +731,19 @@ func (m *MD) reader() error {
 		}
 		f, err := frame.Read(m.rw)
 		if err != nil {
+			// fail() unblocks this read with a deadline or a closed endpoint;
+			// report the reason instead of the artefact.
+			if cause := m.failure(); cause != nil {
+				m.log.Printf("session: read unblocked after %v frames=%d: %v",
+					time.Since(t0).Round(time.Millisecond), nFrames.Load(), cause)
+				return cause
+			}
 			m.log.Printf("handshake: read failed after %v frames=%d first=%v: %v",
 				time.Since(t0).Round(time.Millisecond), nFrames.Load(), gotFirst.Load(), err)
 			return err
 		}
 		nFrames.Add(1)
+		m.lastInbound.Store(time.Now().UnixNano())
 		if gotFirst.CompareAndSwap(false, true) {
 			mt := uint16(0)
 			if len(f.Payload) >= 2 && f.Flags&frame.FlagEncrypted == 0 {
@@ -796,6 +895,18 @@ func (m *MD) handle(channel uint8, flags uint8, payload []byte) error {
 		// which only the reader can deliver.
 		go m.sendBluetoothPairing()
 		return nil
+
+	case MsgByeByeRequest:
+		reason := 0
+		if len(body) >= 2 && body[0] == 0x08 {
+			reason = int(body[1])
+		}
+		m.log.Printf("head unit bye-bye (reason=%d, %s) — acknowledging", reason, byeByeText(reason))
+		resp := frame.PutU16(nil, MsgByeByeResponse)
+		if err := m.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, resp); err != nil {
+			m.log.Printf("bye-bye response: %v", err)
+		}
+		return fmt.Errorf("%w (reason=%d, %s)", ErrHeadUnitByeBye, reason, byeByeText(reason))
 
 	case MsgPingRequest:
 		// Never block the reader on ping — media USB writes can stall waiting for the HU,
