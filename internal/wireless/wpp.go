@@ -22,9 +22,10 @@ const (
 	wppSetupInfo       = 11
 )
 
-// WPP status values.
+// WPP status values: Common.MessageStatus in the real protocol, where
+// STATUS_SUCCESS = 0 (open-headunit, protobuf/Common.java).
 const (
-	wppStatusSuccess = 12
+	wppStatusSuccess = 0
 )
 
 // wppPacket is one WPP frame: [payload_len u16be][msg_id u16be][payload].
@@ -235,65 +236,32 @@ func printable(b []byte) string {
 	return string(b)
 }
 
-// parseVersionSSID reads the Wi-Fi Direct group name (the AP SSID) from
-// WifiVersionRequest's WifiDirectGroupInfo.
-func parseVersionSSID(p []byte) string {
-	f := pbParse(p)
-	if g, ok := pbLastBytes(f, 7); ok {
-		return pbLastString(pbParse(g), 2)
-	}
-	return ""
-}
+// parseVersionSSID: WifiVersionRequest carries car_info=5 and wpp_info=6 (the
+// WPP-over-TCP endpoint), not an SSID; the credentials come in WifiInfoResponse.
+// Kept for the log message only.
+func parseVersionSSID([]byte) string { return "" }
 
-// parseStartEndpoint handles WifiStartRequest (layout A: ip=2/port=3) and the
-// older layout (ip=1/port=2).
+// parseStartEndpoint handles WifiStartRequest: ip_address=1, port=2,
+// start_request_reason=3 (open-headunit Wireless.java).
 func parseStartEndpoint(p []byte) (ip string, port int) {
 	f := pbParse(p)
-	if s := pbLastString(f, 2); s != "" {
-		if v, ok := pbLastVarint(f, 3); ok {
-			return s, int(v)
-		}
-		return s, 0
+	ip = pbLastString(f, 1)
+	if v, ok := pbLastVarint(f, 2); ok {
+		port = int(v)
 	}
-	if s := pbLastString(f, 1); s != "" {
-		if v, ok := pbLastVarint(f, 2); ok {
-			return s, int(v)
-		}
-		return s, 0
-	}
-	return "", 0
+	return ip, port
 }
 
-// parseInfoResponse handles WifiInfoResponse. Two layouts exist:
-//
-//	A: ssid=2, bssid=3, password=4 (string), security=5 (varint)
-//	B: ssid=1, bssid=2, password=3 (string), security=4 (varint)
-//
-// The security field number disambiguates them: layout A has field 4 as a
-// string and field 5 as a varint; layout B has field 4 as a varint.
+// parseInfoResponse handles WifiInfoResponse: ssid=1, key=2, bssid=3,
+// security_mode=4, access_point_type=5 (open-headunit Wireless.java). The BSSID
+// may be an empty string but the field is present, so read by number, not by
+// presence of a non-empty value.
 func parseInfoResponse(p []byte) (ssid, key, bssid string, security uint64) {
 	f := pbParse(p)
-	key4 := pbLastString(f, 4)
-	sec4, hasSec4 := pbLastVarint(f, 4)
-	_, hasSec5 := pbLastVarint(f, 5)
-
-	switch {
-	case key4 != "" || hasSec5:
-		ssid = pbLastString(f, 2)
-		bssid = pbLastString(f, 3)
-		key = key4
-		security, _ = pbLastVarint(f, 5)
-	case hasSec4:
-		ssid = pbLastString(f, 1)
-		bssid = pbLastString(f, 2)
-		key = pbLastString(f, 3)
-		security = sec4
-	default:
-		ssid = pbLastString(f, 2)
-		bssid = pbLastString(f, 3)
-		key = pbLastString(f, 4)
-		security, _ = pbLastVarint(f, 5)
-	}
+	ssid = pbLastString(f, 1)
+	key = pbLastString(f, 2)
+	bssid = pbLastString(f, 3)
+	security, _ = pbLastVarint(f, 4)
 	return
 }
 
@@ -332,22 +300,21 @@ func parseSetupInfo(p []byte) (ip string, port int, ssid, key, bssid string, sec
 	return
 }
 
+// buildVersionResponse is WifiVersionResponse: major=1, minor=2,
+// device_serial=3, status=4.
 func buildVersionResponse(major, minor uint64) []byte {
 	var b []byte
-	if major != 0 {
-		b = pbAppendVarint(b, 2, major)
-	}
-	if minor != 0 {
-		b = pbAppendVarint(b, 3, minor)
-	}
-	b = pbAppendVarint(b, 5, wppStatusSuccess)
-	return b
+	b = pbAppendVarint(b, 1, major)
+	b = pbAppendVarint(b, 2, minor)
+	return pbAppendVarint(b, 4, wppStatusSuccess)
 }
 
+// buildConnectStatus is WifiConnectStatus: status=1, error_message_hint=2.
 func buildConnectStatus(status uint64) []byte {
-	return pbAppendVarint(nil, 2, status)
+	return pbAppendVarint(nil, 1, status)
 }
 
+// buildPingResponse is WifiPingResponse: timestamp=1.
 func buildPingResponse(ts uint64) []byte {
-	return pbAppendVarint(nil, 2, ts)
+	return pbAppendVarint(nil, 1, ts)
 }

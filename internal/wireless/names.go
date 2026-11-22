@@ -71,3 +71,34 @@ func usbProduct() string {
 	}
 	return ""
 }
+
+// Vendor returns the phone vendor in display form: MER_HA_VENDOR from
+// /etc/hw-release ("jolla") title-cased, else "Jolla".
+func Vendor() string {
+	b, err := os.ReadFile("/etc/hw-release")
+	if err == nil {
+		for _, line := range strings.Split(string(b), "\n") {
+			if v, ok := strings.CutPrefix(strings.TrimSpace(line), "MER_HA_VENDOR="); ok {
+				v = strings.Trim(strings.TrimSpace(v), `"`)
+				if v != "" {
+					return strings.ToUpper(v[:1]) + v[1:]
+				}
+			}
+		}
+	}
+	return "Jolla"
+}
+
+// ModelFromAlias is the model part of the user's Bluetooth name: the alias
+// without a leading "<vendor> ". With the alias "Jolla Manolla" and vendor
+// "Jolla" it gives "Manolla", which is what the USB product and the AA device
+// name must carry so every name the car shows is identical.
+func ModelFromAlias(alias, vendor string) string {
+	if vendor == "" {
+		return alias
+	}
+	if rest, ok := strings.CutPrefix(strings.TrimSpace(alias), vendor+" "); ok && rest != "" {
+		return rest
+	}
+	return alias
+}

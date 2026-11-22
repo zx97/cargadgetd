@@ -366,8 +366,8 @@ waitLoop:
 			switch pkt.ID {
 			case wppVersionRequest:
 				f := pbParse(pkt.Payload)
-				major, _ := pbLastVarint(f, 2)
-				minor, _ := pbLastVarint(f, 3)
+				major, _ := pbLastVarint(f, 1)
+				minor, _ := pbLastVarint(f, 2)
 				st.Set("WPP version", true, fmt.Sprintf("%d.%d", major, minor))
 				resp := buildVersionResponse(major, minor)
 				if err := send(wppVersionResponse, resp, fmt.Sprintf("version response %d.%d", major, minor)); err != nil {
@@ -422,7 +422,7 @@ waitLoop:
 				opt.logf("wpp start response: endpoint=%q", endpoint)
 			case wppPingRequest:
 				f := pbParse(pkt.Payload)
-				ts, _ := pbLastVarint(f, 2)
+				ts, _ := pbLastVarint(f, 1)
 				if err := send(wppPingResponse, buildPingResponse(ts), "ping response"); err != nil {
 					return nil, err
 				}

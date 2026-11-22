@@ -34,25 +34,25 @@ func WriteWPPPacket(w io.Writer, id uint16, payload []byte) error {
 	return writeWPP(w, id, payload)
 }
 
-// BuildWifiInfoResponse is the head unit's answer to WifiInfoRequest:
-// ssid=2, bssid=3, key=4, security=5 (the layout parseInfoResponse expects).
-func BuildWifiInfoResponse(ssid, bssid, key string, security uint64) []byte {
+// BuildWifiInfoResponse is the head unit's answer to WifiInfoRequest, with the
+// real field numbers: ssid=1, key=2, bssid=3, security_mode=4,
+// access_point_type=5. The BSSID field is sent even when empty: the schema
+// marks it required and a strict parser rejects the whole message otherwise.
+func BuildWifiInfoResponse(ssid, bssid, key string, security uint64, apType uint64) []byte {
 	var b []byte
-	b = pbAppendString(b, 2, ssid)
-	if bssid != "" {
-		b = pbAppendString(b, 3, bssid)
-	}
-	if key != "" {
-		b = pbAppendString(b, 4, key)
-	}
-	return pbAppendVarint(b, 5, security)
+	b = pbAppendString(b, 1, ssid)
+	b = pbAppendString(b, 2, key)
+	b = pbAppendString(b, 3, bssid)
+	b = pbAppendVarint(b, 4, security)
+	return pbAppendVarint(b, 5, apType)
 }
 
 // BuildStartRequest tells the phone where to open the GAL TCP/TLS session:
-// ip=2, port=3.
+// ip_address=1, port=2, start_request_reason=3.
 func BuildStartRequest(ip string, port int) []byte {
-	b := pbAppendString(nil, 2, ip)
-	return pbAppendVarint(b, 3, uint64(port))
+	b := pbAppendString(nil, 1, ip)
+	b = pbAppendVarint(b, 2, uint64(port))
+	return pbAppendVarint(b, 3, 0) // USER_REQUEST
 }
 
 // BuildPingResponse echoes a ping timestamp (field 2).

@@ -55,10 +55,11 @@ func main() {
 			log.Printf("become root for name lookup: %v", err)
 		}
 	}
+	accessoryVendor := wireless.Vendor()
 	if bt, _, _ := wireless.LocalNames(); bt != "" {
-		accessoryProductName = bt
+		accessoryProductName = wireless.ModelFromAlias(bt, accessoryVendor)
 	}
-	log.Printf("accessory product name: %q", accessoryProductName)
+	log.Printf("accessory name: vendor=%q model=%q", accessoryVendor, accessoryProductName)
 
 	if *btAdapter != "" {
 		if os.Geteuid() != 0 {

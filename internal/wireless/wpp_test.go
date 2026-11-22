@@ -24,43 +24,40 @@ func TestWPPFrameRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParseStartEndpointLayoutA(t *testing.T) {
-	p := pbAppendString(nil, 2, "192.168.49.1")
-	p = pbAppendVarint(p, 3, 5277)
-	ip, port := parseStartEndpoint(p)
-	if ip != "192.168.49.1" || port != 5277 {
-		t.Fatalf("%s:%d", ip, port)
-	}
-}
-
-func TestParseStartEndpointLayoutB(t *testing.T) {
-	p := pbAppendString(nil, 1, "10.0.0.1")
+func TestParseStartEndpoint(t *testing.T) {
+	// WifiStartRequest: ip_address=1, port=2, start_request_reason=3.
+	p := pbAppendString(nil, 1, "192.168.49.1")
 	p = pbAppendVarint(p, 2, 5288)
+	p = pbAppendVarint(p, 3, 0)
 	ip, port := parseStartEndpoint(p)
-	if ip != "10.0.0.1" || port != 5288 {
+	if ip != "192.168.49.1" || port != 5288 {
 		t.Fatalf("%s:%d", ip, port)
 	}
 }
 
-func TestParseInfoResponseLayoutA(t *testing.T) {
-	p := pbAppendString(nil, 2, "test-ssid")
+func TestParseInfoResponse(t *testing.T) {
+	// ssid=1, key=2, bssid=3, security_mode=4, access_point_type=5.
+	p := pbAppendString(nil, 1, "test-ssid")
+	p = pbAppendString(p, 2, "secret")
 	p = pbAppendString(p, 3, "AA:BB:CC:DD:EE:FF")
-	p = pbAppendString(p, 4, "secret")
-	p = pbAppendVarint(p, 5, 8)
+	p = pbAppendVarint(p, 4, 8) // WPA2_PERSONAL
+	p = pbAppendVarint(p, 5, 1) // DYNAMIC
 	ssid, key, bssid, sec := parseInfoResponse(p)
 	if ssid != "test-ssid" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 8 {
 		t.Fatalf("%q %q %q %d", ssid, key, bssid, sec)
 	}
 }
 
-func TestParseInfoResponseLayoutB(t *testing.T) {
+// A head unit may send an empty BSSID; the field is required, so it is present
+// but empty and must not shift the other fields.
+func TestParseInfoResponseEmptyBssid(t *testing.T) {
 	p := pbAppendString(nil, 1, "test-ssid")
-	p = pbAppendString(p, 2, "AA:BB:CC:DD:EE:FF")
-	p = pbAppendString(p, 3, "secret")
-	p = pbAppendVarint(p, 4, 12)
-	ssid, key, bssid, sec := parseInfoResponse(p)
-	if ssid != "test-ssid" || key != "secret" || bssid != "AA:BB:CC:DD:EE:FF" || sec != 12 {
-		t.Fatalf("%q %q %q %d", ssid, key, bssid, sec)
+	p = pbAppendString(p, 2, "secret")
+	p = pbAppendString(p, 3, "")
+	p = pbAppendVarint(p, 4, 8)
+	ssid, key, bssid, _ := parseInfoResponse(p)
+	if ssid != "test-ssid" || key != "secret" || bssid != "" {
+		t.Fatalf("%q %q %q", ssid, key, bssid)
 	}
 }
 
@@ -86,27 +83,27 @@ func TestParseSetupInfo(t *testing.T) {
 	}
 }
 
+// WifiVersionRequest carries car_info=5 and wpp_info=6 (the WPP-over-TCP
+// endpoint), not an SSID: credentials only arrive in WifiInfoResponse.
 func TestParseVersionSSID(t *testing.T) {
-	var group []byte
-	group = pbAppendString(group, 2, "test-ssid")
-	var p []byte
-	p = pbAppendVarint(p, 2, 1)
-	p = pbAppendBytes(p, 7, group)
-	if got := parseVersionSSID(p); got != "test-ssid" {
+	p := pbAppendVarint(nil, 1, 1)
+	p = pbAppendVarint(p, 2, 0)
+	if got := parseVersionSSID(p); got != "" {
 		t.Fatalf("got %q", got)
 	}
 }
 
 func TestBuildVersionResponse(t *testing.T) {
+	// WifiVersionResponse: major=1, minor=2, status=4.
 	resp := buildVersionResponse(1, 7)
 	f := pbParse(resp)
-	if v, _ := pbLastVarint(f, 2); v != 1 {
+	if v, _ := pbLastVarint(f, 1); v != 1 {
 		t.Fatalf("major=%d", v)
 	}
-	if v, _ := pbLastVarint(f, 3); v != 7 {
+	if v, _ := pbLastVarint(f, 2); v != 7 {
 		t.Fatalf("minor=%d", v)
 	}
-	if v, _ := pbLastVarint(f, 5); v != wppStatusSuccess {
+	if v, _ := pbLastVarint(f, 4); v != wppStatusSuccess {
 		t.Fatalf("status=%d", v)
 	}
 }

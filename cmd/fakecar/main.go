@@ -116,7 +116,7 @@ func runWPP(f *os.File, ssid, key, ip string, port int, logf func(string, ...any
 		switch pkt.ID {
 		case wireless.WPPInfoRequest:
 			if err := wireless.WriteWPPPacket(f, wireless.WPPInfoResponse,
-				wireless.BuildWifiInfoResponse(ssid, "", key, 0)); err != nil {
+				wireless.BuildWifiInfoResponse(ssid, "", key, 8, 1)); err != nil {
 				logf("fakecar: wpp info response: %v", err)
 				return
 			}

@@ -54,6 +54,9 @@ type linkSnap struct {
 // for the accessory session: the head unit lists the phone by that string.
 var accessoryProductName string
 
+// accessoryVendor is the manufacturer string for the accessory descriptors.
+var accessoryVendor = "Jolla"
+
 // identityFiles are snapshotted and restored with the ask gadget.
 // An empty val is left as the phone set it. A Pixel comes back from AOA
 // START as 18d1:2d00 still named Google / Pixel / its real serial. Replacing
@@ -277,15 +280,24 @@ func writeAccessoryIdentity(gadget string) error {
 	// alias) so the wired and wireless entries carry the same, expected name.
 	// It stays empty in tests, which keeps the phone's own strings.
 	if accessoryProductName != "" {
-		// Both strings, so the head unit can match its USB entry with the
-		// Bluetooth name: the VW shows '<manufacturer> <product>' for USB
-		// devices and keeps a separate AA entry when they differ.
-		for _, rel := range []string{"strings/0x409/product", "strings/0x409/manufacturer"} {
-			if err := os.WriteFile(filepath.Join(gadget, rel), []byte(accessoryProductName+"\n"), 0644); err != nil {
-				log.Printf("%s %q: %v", rel, accessoryProductName, err)
+		// The head unit shows '<manufacturer> <product>' for USB devices, so
+		// put the whole name in the product and leave the manufacturer empty:
+		// that displays exactly the Bluetooth name, which is what has to match
+		// for the head unit to merge its USB and Bluetooth entries.
+		prod := filepath.Join(gadget, "strings/0x409/product")
+		if err := os.WriteFile(prod, []byte(accessoryProductName+"\n"), 0644); err != nil {
+			log.Printf("product string %q: %v", accessoryProductName, err)
+		}
+		// configfs ignores an empty write, so the manufacturer stays the
+		// phone's own ("Jolla") and the head unit shows 'Jolla Manolla': no
+		// duplicated name, and the product still carries the user's name.
+		man := filepath.Join(gadget, "strings/0x409/manufacturer")
+		if accessoryVendor != "" {
+			if err := os.WriteFile(man, []byte(accessoryVendor+"\n"), 0644); err != nil {
+				log.Printf("manufacturer %q: %v", accessoryVendor, err)
 			}
 		}
-		log.Printf("accessory name set to %q (Bluetooth alias) for product and manufacturer", accessoryProductName)
+		log.Printf("accessory name: product=%q manufacturer=%q", readTrim(prod), readTrim(man))
 	}
 	man := readTrim(filepath.Join(gadget, "strings/0x409/manufacturer"))
 	prod := readTrim(filepath.Join(gadget, "strings/0x409/product"))
