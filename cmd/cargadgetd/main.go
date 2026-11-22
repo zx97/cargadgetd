@@ -54,6 +54,7 @@ func main() {
 	wirelessSSID := flag.String("wireless-ssid", "", "require this Wi-Fi SSID (default: the one from the head unit)")
 	wirelessIface := flag.String("wireless-iface", "wlan0", "Wi-Fi interface")
 	wirelessWeb := flag.Int("wireless-web", 9288, "wireless status page port (127.0.0.1)")
+	wirelessPassive := flag.Bool("wireless-passive", false, "wait for the head unit to connect to our AA profile; never page or probe")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	certInfo := flag.Bool("cert-info", false, "print reversegearhead_probe and exit")
 	flag.Parse()
@@ -186,6 +187,7 @@ func main() {
 			Channel:   uint8(*wirelessChannel),
 			Interface: *wirelessIface,
 			SSID:      *wirelessSSID,
+			Passive:   *wirelessPassive,
 			Logf:      log.Printf,
 		}, st, func(conn net.Conn) {
 			serve(conn, "wireless", false)

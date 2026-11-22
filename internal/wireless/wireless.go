@@ -26,6 +26,11 @@ type Options struct {
 	WiFiTimeout time.Duration
 	// HandshakeTimeout bounds the RFCOMM WPP exchange. Default 60s.
 	HandshakeTimeout time.Duration
+	// Passive waits for the head unit to open our AA RFCOMM profile and never
+	// pages or probes. It is the handover case: the car learns the phone over
+	// USB, drops USB, and connects to the phone itself; our own pages and
+	// probes in that window are refused and only add noise.
+	Passive bool
 	// Logf receives progress lines.
 	Logf func(string, ...any)
 	// Status receives the live checks rendered by the status web page.
@@ -136,7 +141,11 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		conns = c
 		st.Set("Profil AA", true, "enregistré, attente de la voiture")
 		st.Phase("profile")
-		opt.logf("profile: waiting up to 30s for the head unit to open the AA RFCOMM channel")
+		waitFor := 30 * time.Second
+		if opt.Passive {
+			waitFor = 5 * time.Minute
+		}
+		opt.logf("profile: waiting up to %s for the head unit to open the AA RFCOMM channel (passive=%v)", waitFor, opt.Passive)
 		t = time.Now()
 		select {
 		case f := <-conns:
@@ -146,7 +155,11 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 			st.Phase("wpp")
 			opt.logf("rfcomm: incoming connection from the head unit after %s", sinceText(t))
 			return handshake(ctx, rc, opt, st, guess)
-		case <-time.After(30 * time.Second):
+		case <-time.After(waitFor):
+			if opt.Passive {
+				st.Set("Profil AA", false, "pas de connexion entrante (mode passif)")
+				return nil, fmt.Errorf("passive: no incoming connection after %s", sinceText(t))
+			}
 			st.Set("Profil AA", false, "pas de connexion entrante, essai client")
 			opt.logf("profile: no incoming connection after %s, falling back to client", sinceText(t))
 		case <-ctx.Done():
