@@ -155,7 +155,10 @@ func main() {
 		md := session.NewMD(rw, ssl, log.Default())
 		md.SetUSBBulk(usbBulk)
 		md.SetLocalBluetooth(btAddr, btName)
-		md.SetDeviceInfo(btName, "Jolla")
+		// The head unit builds its AA entry name from brand + device name. Leave
+		// the brand empty so the entry is exactly the Bluetooth name, which is
+		// what it must match to merge the USB and Bluetooth identities.
+		md.SetDeviceInfo(btName, "")
 		if usbBulk {
 			// Stock Android Auto also connects the head unit's Bluetooth link
 			// during the session (its car-Bluetooth service). That active link

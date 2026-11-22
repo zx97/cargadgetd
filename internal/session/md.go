@@ -769,14 +769,13 @@ func (m *MD) handle(channel uint8, flags uint8, payload []byte) error {
 		name, brand := m.deviceName, m.deviceBrand
 		m.mu.Unlock()
 		if name == "" {
-			name = "cargadgetd"
-		}
-		if brand == "" {
-			brand = "linux"
+			name, brand = "cargadgetd", "linux"
 		}
 		req := []byte{}
 		req = append(req, encodeProtoString(4, name)...)
-		req = append(req, encodeProtoString(5, brand)...)
+		if brand != "" {
+			req = append(req, encodeProtoString(5, brand)...)
+		}
 		m.log.Printf("SDR request device_name=%q device_brand=%q", name, brand)
 		if err := m.sendEnc(0, 0, MsgServiceDiscoveryRequest, req); err != nil {
 			return err
