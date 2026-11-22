@@ -197,7 +197,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	channel := opt.Channel
 	if channel == 0 {
 		st.Phase("sdp")
-		for attempt := 1; attempt <= 5; attempt++ {
+		for attempt := 1; attempt <= 3; attempt++ {
 			if rc, ok := acceptIncoming("during the SDP lookup"); ok {
 				return handshake(ctx, rc, opt, st, guess)
 			}
@@ -211,7 +211,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 			}
 			st.Set("SDP canal AA", false, err.Error())
 			opt.logf("sdp: attempt %d failed after %s: %v", attempt, sinceText(t), err)
-			time.Sleep(2 * time.Second)
+			time.Sleep(3 * time.Second)
 		}
 		if channel == 0 {
 			// SDP was refused (usually the baseband link is not fully up yet).

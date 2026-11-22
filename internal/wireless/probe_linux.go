@@ -14,7 +14,10 @@ import (
 // record on channel 7 and its generic SPP service on 8 — dialling 8 reaches a
 // service that never speaks WPP, which looked like "the car ignores us".
 // The rest are common AA channels on other head units.
-var candidateAAChannels = []uint8{7, 9, 6, 5, 10, 11, 4, 3, 12, 13, 2, 14, 15}
+// Kept short on purpose: Sailfish feeds BlueZ through hci_vhci and an
+// AppSupport bridge, and a burst of connect attempts was enough to stall the
+// controller ("link tx timeout", then the radio stopped answering altogether).
+var candidateAAChannels = []uint8{7, 8, 9}
 
 // probeAAChannel finds the head unit's Android Auto RFCOMM channel by talking
 // to it: connect, send a WifiInfoRequest, and keep the channel that answers.
@@ -53,6 +56,7 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 			}
 		}
 		rc.Close()
+		time.Sleep(time.Second)
 		if werr != nil {
 			logf("probe: channel %d: write failed after %s: %v", ch, sinceText(t), werr)
 			continue

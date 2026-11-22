@@ -5,6 +5,7 @@ package wireless
 import (
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/godbus/dbus/v5"
@@ -59,62 +60,79 @@ func (p *aaProfile) Release() *dbus.Error {
 }
 
 var aaServer struct {
-	once  sync.Once
-	conns chan *os.File
-	err   error
+	mu         sync.Mutex
+	conns      chan *os.File
+	exported   bool
+	registered bool
 }
 
-// ensureAAProfile registers the Android Auto RFCOMM server profile once, so
-// the head unit sees the AA UUID in the phone's SDP record and offers the
-// Android Auto entry.
+// ensureAAProfile registers the Android Auto RFCOMM server profile, so the head
+// unit sees the AA UUID in the phone's SDP record and offers the Android Auto
+// entry.
+//
+// It is idempotent per process *and* per BlueZ lifetime: the registration is
+// requested on every Dial attempt and "AlreadyExists" is accepted, because a
+// bluetoothd restart on this platform (Sailfish feeds BlueZ through hci_vhci
+// and an AppSupport bridge) drops the registration while our process keeps
+// running. The old sync.Once silently lost the profile in that case.
 func ensureAAProfile(logf func(string, ...any)) (<-chan *os.File, error) {
-	aaServer.once.Do(func() {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	aaServer.mu.Lock()
+	defer aaServer.mu.Unlock()
+	if aaServer.conns == nil {
 		aaServer.conns = make(chan *os.File, 1)
-		conn, err := dbus.SystemBus()
-		if err != nil {
-			aaServer.err = err
-			return
-		}
-		path := dbus.ObjectPath("/org/cargadgetd/aa")
+	}
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return nil, err
+	}
+	path := dbus.ObjectPath("/org/cargadgetd/aa")
+	if !aaServer.exported {
 		p := &aaProfile{conns: aaServer.conns, logf: logf}
 		if err := conn.Export(p, path, "org.bluez.Profile1"); err != nil {
-			aaServer.err = fmt.Errorf("export profile: %w", err)
-			return
+			return nil, fmt.Errorf("export profile: %w", err)
 		}
-		opts := map[string]dbus.Variant{
-			// BlueZ synthesises the SDP record from these options. Version
-			// adds the BluetoothProfileDescriptorList (attribute 0x0009)
-			// that head units read before offering the Android Auto entry;
-			// Name becomes the ServiceName (0x0100).
-			"Name":                  dbus.MakeVariant("Android Auto"),
-			"Role":                  dbus.MakeVariant("server"),
-			"Service":               dbus.MakeVariant(aaUUIDText),
-			"Channel":               dbus.MakeVariant(uint16(8)),
-			"Version":               dbus.MakeVariant(uint16(0x0100)),
-			"AutoConnect":           dbus.MakeVariant(false),
-			"RequireAuthentication": dbus.MakeVariant(false),
-			"RequireAuthorization":  dbus.MakeVariant(false),
-		}
-		call := func() error {
-			return conn.Object(bluezService, "/org/bluez").
-				Call("org.bluez.ProfileManager1.RegisterProfile", 0, path, aaUUIDText, opts).Err
-		}
+		aaServer.exported = true
+	}
+	opts := map[string]dbus.Variant{
+		// BlueZ synthesises the SDP record from these options. Version adds
+		// the BluetoothProfileDescriptorList (attribute 0x0009) that head
+		// units read before offering the Android Auto entry; Name becomes the
+		// ServiceName (0x0100).
+		"Name":                  dbus.MakeVariant("Android Auto"),
+		"Role":                  dbus.MakeVariant("server"),
+		"Service":               dbus.MakeVariant(aaUUIDText),
+		"Channel":               dbus.MakeVariant(uint16(8)),
+		"Version":               dbus.MakeVariant(uint16(0x0100)),
+		"AutoConnect":           dbus.MakeVariant(false),
+		"RequireAuthentication": dbus.MakeVariant(false),
+		"RequireAuthorization":  dbus.MakeVariant(false),
+	}
+	call := func() error {
+		return conn.Object(bluezService, "/org/bluez").
+			Call("org.bluez.ProfileManager1.RegisterProfile", 0, path, aaUUIDText, opts).Err
+	}
+	err = call()
+	if err != nil && !isAlreadyExists(err) {
+		// Channel 8 may be taken; let BlueZ choose one.
+		logf("profile: RegisterProfile channel=8 failed: %s; retrying with an automatic channel", dbusErrText(err))
+		opts["Channel"] = dbus.MakeVariant(uint16(0))
 		err = call()
-		if err != nil {
-			if logf != nil {
-				logf("profile: RegisterProfile channel=8 failed: %v; retrying with an automatic channel", err)
-			}
-			// Channel 8 may be taken; let BlueZ choose one.
-			opts["Channel"] = dbus.MakeVariant(uint16(0))
-			err = call()
-		}
-		if err != nil {
-			aaServer.err = fmt.Errorf("register profile: %w", err)
-			return
-		}
-		if logf != nil {
-			logf("profile: Android Auto RFCOMM server registered (%s), options=%v", aaUUIDText, opts)
-		}
-	})
-	return aaServer.conns, aaServer.err
+	}
+	if err != nil && !isAlreadyExists(err) {
+		return nil, fmt.Errorf("register profile: %s", dbusErrText(err))
+	}
+	if !aaServer.registered {
+		aaServer.registered = true
+		logf("profile: Android Auto RFCOMM server registered (%s), options=%v", aaUUIDText, opts)
+	}
+	return aaServer.conns, nil
+}
+
+// isAlreadyExists reports a BlueZ "profile already registered" answer, which is
+// success for an idempotent registration.
+func isAlreadyExists(err error) bool {
+	return err != nil && strings.Contains(dbusErrText(err), "AlreadyExists")
 }
