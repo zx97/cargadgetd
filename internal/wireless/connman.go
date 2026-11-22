@@ -132,9 +132,9 @@ func friendlyWiFiError(ssid string, err error) error {
 	case strings.Contains(s, "Already connected"), strings.Contains(s, "In progress"):
 		return nil
 	case strings.Contains(s, "No carrier"), strings.Contains(s, "no carrier"):
-		return fmt.Errorf("réseau « %s » hors de portée : allume le contact de la voiture", ssid)
+		return fmt.Errorf("network « %s » out of range: turn the car ignition on", ssid)
 	case strings.Contains(s, "Permission denied"), strings.Contains(s, "AuthFailed"):
-		return fmt.Errorf("ConnMan refuse l'accès : helper setuid absent (réinstalle le paquet)")
+		return fmt.Errorf("ConnMan denied access: setuid helper missing (reinstall the package)")
 	}
 	return err
 }

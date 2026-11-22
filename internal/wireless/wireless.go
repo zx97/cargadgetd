@@ -86,19 +86,21 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		// log for diagnosis.
 		human := err
 		if strings.Contains(err.Error(), "no paired Bluetooth device") {
-			human = fmt.Errorf("aucune voiture appairée : appaire le téléphone depuis le menu Bluetooth de la voiture, puis touche « Redémarrer »")
+			human = fmt.Errorf("no paired car: pair the phone from the car's Bluetooth menu, then press Restart")
 		}
 		st.Error(human)
-		st.Set("Bluetooth appairé", false, human.Error())
+		st.Set("Bluetooth paired", false, human.Error())
 		return nil, human
 	}
 	opt.logf("bluetooth: device found in %s", sinceText(t))
-	st.Set("Bluetooth appairé", true, fmt.Sprintf("%s %s", dev.Name, dev.Address))
+	st.Step("Car found: %s (%s)", dev.Name, dev.Address)
+	st.Setf("Bluetooth paired", true, "%s %s", dev.Name, dev.Address)
 	opt.logf("bluetooth: %s addr=%s paired=%v bonded=%v trusted=%v connected=%v services_resolved=%v adapter=%s uuids=%v",
 		dev.Name, dev.Address, dev.Paired, dev.Bonded, dev.Trusted, dev.Connected, dev.ServicesResolved, dev.Adapter, dev.UUIDs)
 	t = time.Now()
 	dev.EnsureAdapter(opt.logf)
 	opt.logf("bluetooth: adapter setup took %s", sinceText(t))
+	st.Step("Bluetooth ready (adapter %s)", dev.Adapter)
 	logWiFi(opt.Interface, opt.logf)
 	if services, err := connmanWiFiServices(); err != nil {
 		opt.logf("wifi: connman: %v", err)
@@ -117,7 +119,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		guess = savedSSIDFor(dev.Name)
 	}
 	if guess != "" {
-		st.Set("Wi-Fi auto", true, fmt.Sprintf("réseau enregistré %q (Bluetooth %q)", guess, dev.Name))
+		st.Setf("Saved network", true, "saved network %q (Bluetooth %q)", guess, dev.Name)
 		st.SetWiFiWant(guess)
 		opt.logf("wifi: auto-detected saved network %q from Bluetooth name %q", guess, dev.Name)
 		t = time.Now()
@@ -125,43 +127,46 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 			st.Set("Wi-Fi join", false, err.Error())
 			opt.logf("wifi: early join %q failed after %s: %v", guess, sinceText(t), err)
 		} else {
-			st.Set("Wi-Fi join", true, "demandé à ConnMan")
+			st.Set("Wi-Fi join", true, "requested from ConnMan")
 			opt.logf("wifi: early join %q accepted by ConnMan in %s", guess, sinceText(t))
 		}
 	} else {
-		st.Set("Wi-Fi auto", false, "aucun réseau enregistré ne correspond au nom Bluetooth")
+		st.Set("Saved network", false, "no saved network matches the Bluetooth name")
 	}
 
 	// Primary path: the head unit connects to the phone's AA RFCOMM profile.
 	var conns <-chan *os.File
 	if c, err := ensureAAProfile(opt.logf); err != nil {
-		st.Set("Profil AA", false, err.Error())
+		st.Set("Android Auto profile", false, err.Error())
 		opt.logf("profile: %v", err)
 	} else {
 		conns = c
-		st.Set("Profil AA", true, "enregistré, attente de la voiture")
+		st.Set("Android Auto profile", true, "registered, waiting for the car")
 		st.Phase("profile")
 		waitFor := 30 * time.Second
 		if opt.Passive {
 			waitFor = 5 * time.Minute
 		}
 		opt.logf("profile: waiting up to %s for the head unit to open the AA RFCOMM channel (passive=%v)", waitFor, opt.Passive)
+		st.Step("Android Auto profile published, waiting for the car (max %s)", waitFor)
 		t = time.Now()
 		select {
 		case f := <-conns:
 			rc := &fileConn{File: f}
-			st.Set("RFCOMM entrant", true, "voiture connectée")
-			st.Set("Lien Bluetooth", true, "voiture connectée")
+			st.Set("Incoming RFCOMM", true, "car connected")
+			st.Set("Bluetooth link", true, "car connected")
 			st.Phase("wpp")
 			opt.logf("rfcomm: incoming connection from the head unit after %s", sinceText(t))
+			st.Step("The car connects to us")
 			return handshake(ctx, rc, opt, st, guess)
 		case <-time.After(waitFor):
 			if opt.Passive {
-				st.Set("Profil AA", false, "pas de connexion entrante (mode passif)")
+				st.Set("Android Auto profile", false, "no incoming connection (passive mode)")
 				return nil, fmt.Errorf("passive: no incoming connection after %s", sinceText(t))
 			}
-			st.Set("Profil AA", false, "pas de connexion entrante, essai client")
+			st.Set("Android Auto profile", false, "no incoming connection, trying as client")
 			opt.logf("profile: no incoming connection after %s, falling back to client", sinceText(t))
+			st.Step("The car does not come: we call it")
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
@@ -177,8 +182,8 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		select {
 		case f := <-conns:
 			opt.logf("rfcomm: head unit connected while %s; using its channel", where)
-			st.Set("RFCOMM entrant", true, "voiture connectée")
-			st.Set("Lien Bluetooth", true, "voiture connectée")
+			st.Set("Incoming RFCOMM", true, "car connected")
+			st.Set("Bluetooth link", true, "car connected")
 			st.Phase("wpp")
 			return &fileConn{File: f}, true
 		default:
@@ -194,17 +199,17 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	if err := dev.Connect(); err != nil {
 		human := humanBluetoothError(err)
 		opt.logf("bluetooth: Device1.Connect failed after %s: %v", sinceText(t), err)
-		st.Set("Lien Bluetooth", false, human.Error())
+		st.Set("Bluetooth link", false, human.Error())
 	} else {
 		opt.logf("bluetooth: Device1.Connect returned OK in %s", sinceText(t))
-		st.Set("Lien Bluetooth", true, "connecté")
+		st.Set("Bluetooth link", true, "connected")
 	}
 	if dev.WaitConnected(10*time.Second, opt.logf) {
 		opt.logf("bluetooth: link up")
-		st.Set("Lien Bluetooth", true, "lien monté")
+		st.Set("Bluetooth link", true, "link up")
 	} else {
 		opt.logf("bluetooth: link still down after 10s")
-		st.Set("Lien Bluetooth", false, "lien non monté")
+		st.Set("Bluetooth link", false, "link down")
 	}
 
 	channel := opt.Channel
@@ -218,28 +223,30 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 			ch, err := sdpRFCOMMChannel(dev.Address, opt.logf)
 			if err == nil {
 				channel = ch
-				st.Set("SDP canal AA", true, fmt.Sprintf("canal %d", ch))
+				st.Setf("RFCOMM channel", true, "channel %d", ch)
 				opt.logf("sdp: Android Auto RFCOMM channel %d (attempt %d took %s)", ch, attempt, sinceText(t))
+				st.Step("RFCOMM channel %d found over SDP", ch)
 				break
 			}
-			st.Set("SDP canal AA", false, err.Error())
+			st.Set("RFCOMM channel", false, err.Error())
 			opt.logf("sdp: attempt %d failed after %s: %v", attempt, sinceText(t), err)
 			time.Sleep(3 * time.Second)
 		}
 		if channel == 0 {
 			// SDP was refused (usually the baseband link is not fully up yet).
 			// Do not guess: ask the head unit itself which channel speaks WPP.
-			st.Set("SDP canal AA", false, "canal SDP indisponible, sonde des canaux")
+			st.Set("RFCOMM channel", false, "SDP unavailable, probing channels")
 			ch, perr := probeAAChannel(ctx, dev.Address, opt.logf)
 			if perr != nil {
-				st.Set("SDP canal AA", false, perr.Error())
+				st.Set("RFCOMM channel", false, perr.Error())
 				return nil, perr
 			}
 			channel = ch
-			st.Set("SDP canal AA", true, fmt.Sprintf("canal %d (sonde WPP)", ch))
+			st.Setf("RFCOMM channel", true, "channel %d (WPP probe)", ch)
+			st.Step("RFCOMM channel %d found by probing", ch)
 		}
 	} else {
-		st.Set("SDP canal AA", true, fmt.Sprintf("canal forcé %d", channel))
+		st.Setf("RFCOMM channel", true, "forced channel %d", channel)
 	}
 
 	if rc, ok := acceptIncoming("before dialling the car channel"); ok {
@@ -254,7 +261,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		st.Set("RFCOMM", false, human.Error())
 		return nil, human
 	}
-	st.Set("RFCOMM", true, fmt.Sprintf("canal %d", channel))
+	st.Setf("RFCOMM", true, "channel %d", channel)
 	st.Phase("wpp")
 	if fc, ok := rc.(*fileConn); ok {
 		opt.logf("rfcomm: connected to %s channel %d in %s (fd=%d)", dev.Address, channel, sinceText(t), fc.Fd())
@@ -276,11 +283,11 @@ func humanBluetoothError(err error) error {
 		strings.Contains(s, "page-timeout"),
 		strings.Contains(s, "page timeout"),
 		strings.Contains(s, "connection timed out"):
-		return fmt.Errorf("voiture absente : Bluetooth injoignable (contact allumé ?)")
+		return fmt.Errorf("car absent: Bluetooth unreachable (ignition on?)")
 	case strings.Contains(s, "device or resource busy"):
-		return fmt.Errorf("canal RFCOMM occupé par une session précédente : nouvelle tentative au prochain cycle")
+		return fmt.Errorf("RFCOMM channel busy with a previous session: retrying next cycle")
 	case strings.Contains(s, "connection refused"):
-		return fmt.Errorf("aucun service Android Auto sur ce canal : nouvelle tentative au prochain cycle")
+		return fmt.Errorf("no Android Auto service on this channel: retrying next cycle")
 	}
 	return err
 }
@@ -368,7 +375,8 @@ waitLoop:
 				f := pbParse(pkt.Payload)
 				major, _ := pbLastVarint(f, 1)
 				minor, _ := pbLastVarint(f, 2)
-				st.Set("WPP version", true, fmt.Sprintf("%d.%d", major, minor))
+				st.Setf("WPP version", true, "%d.%d", major, minor)
+				st.Step("WPP version %d.%d", major, minor)
 				resp := buildVersionResponse(major, minor)
 				if err := send(wppVersionResponse, resp, fmt.Sprintf("version response %d.%d", major, minor)); err != nil {
 					return nil, err
@@ -378,7 +386,7 @@ waitLoop:
 						ssid = g
 					}
 					st.SetWiFiWant(g)
-					st.Set("WPP Wi-Fi", true, fmt.Sprintf("ssid=%q (version)", g))
+					st.Setf("WPP Wi-Fi", true, "ssid=%q (version)", g)
 				}
 				// Legacy head units answer this with WifiInfoResponse.
 				if err := send(wppInfoRequest, nil, "info request"); err != nil {
@@ -388,12 +396,14 @@ waitLoop:
 				ip, port, s, k, b, sec := parseSetupInfo(pkt.Payload)
 				if ip != "" {
 					endpoint = net.JoinHostPort(ip, fmt.Sprint(port))
-					st.Set("WPP endpoint", true, endpoint)
+					st.Set("Endpoint", true, endpoint)
+					st.Step("Car endpoint: %s", endpoint)
 				}
 				if s != "" {
 					ssid, key, bssid, security = s, k, b, sec
 					st.SetWiFiWant(ssid)
-					st.Set("WPP Wi-Fi", true, fmt.Sprintf("ssid=%q", ssid))
+					st.Setf("WPP Wi-Fi", true, "ssid=%q", ssid)
+					st.Step("Car Wi-Fi: %q (security %d)", ssid, security)
 				}
 				opt.logf("wpp setup: endpoint=%q ssid=%q key_len=%d bssid=%q security=%d",
 					endpoint, ssid, len(key), bssid, security)
@@ -402,7 +412,8 @@ waitLoop:
 				if s != "" {
 					ssid, key, bssid, security = s, k, b, sec
 					st.SetWiFiWant(ssid)
-					st.Set("WPP Wi-Fi", true, fmt.Sprintf("ssid=%q", ssid))
+					st.Setf("WPP Wi-Fi", true, "ssid=%q", ssid)
+					st.Step("Car Wi-Fi: %q (security %d)", ssid, security)
 				}
 				opt.logf("wpp info: ssid=%q key_len=%d bssid=%q security=%d",
 					ssid, len(key), bssid, security)
@@ -410,14 +421,16 @@ waitLoop:
 				ip, port := parseStartEndpoint(pkt.Payload)
 				if ip != "" {
 					endpoint = net.JoinHostPort(ip, fmt.Sprint(port))
-					st.Set("WPP endpoint", true, endpoint)
+					st.Set("Endpoint", true, endpoint)
+					st.Step("Car endpoint: %s", endpoint)
 				}
 				opt.logf("wpp start request: endpoint=%q", endpoint)
 			case wppStartResponse:
 				ip, port := parseStartEndpoint(pkt.Payload)
 				if ip != "" {
 					endpoint = net.JoinHostPort(ip, fmt.Sprint(port))
-					st.Set("WPP endpoint", true, endpoint)
+					st.Set("Endpoint", true, endpoint)
+					st.Step("Car endpoint: %s", endpoint)
 				}
 				opt.logf("wpp start response: endpoint=%q", endpoint)
 			case wppPingRequest:
@@ -469,7 +482,7 @@ waitLoop:
 	}
 	opt.logf("wifi: target ssid=%q (from %s), endpoint=%q, waiting up to %s", want, wantSrc, endpoint, opt.WiFiTimeout)
 	if err := waitWifi(ctx, opt.Interface, want, opt.WiFiTimeout, opt.logf, st); err != nil {
-		st.Set("Wi-Fi voiture", false, err.Error())
+		st.Set("Car Wi-Fi", false, err.Error())
 		return nil, err
 	}
 	if err := send(wppConnectStatus, buildConnectStatus(wppStatusSuccess), "connect status SUCCESS"); err != nil {
@@ -480,12 +493,13 @@ waitLoop:
 	t := time.Now()
 	conn, err = net.DialTimeout("tcp", endpoint, 10*time.Second)
 	if err != nil {
-		st.Set("TCP voiture", false, err.Error())
+		st.Set("Car TCP", false, err.Error())
 		return nil, fmt.Errorf("tcp dial %s after %s: %w", endpoint, sinceText(t), err)
 	}
-	st.Set("TCP voiture", true, endpoint)
-	st.Set("Session AA", true, "TCP connecté")
+	st.Set("Car TCP", true, endpoint)
+	st.Set("Android Auto session", true, "TCP connected")
 	st.Phase("session")
 	opt.logf("tcp: connected to %s in %s", endpoint, sinceText(t))
+	st.Step("TCP connected to %s", endpoint)
 	return conn, nil
 }

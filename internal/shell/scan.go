@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 )
 
 // pluginOpener is OpenPlugin; tests swap it to assert Load does not block.
@@ -76,6 +77,19 @@ func Load(s *Shell, dirs []string) []string {
 		ids = append(ids, id)
 		jobs = append(jobs, job{path: path, id: id})
 	}
+	// MapLibre (the maps app) needs static TLS; dlopen it before the other
+	// plugins so the static TLS surplus is still large enough. Loaded last it
+	// fails with "cannot allocate memory in static TLS block" and the map area
+	// stays blank.
+	sort.SliceStable(jobs, func(i, j int) bool {
+		if jobs[i].id == "maps" {
+			return i != j && true
+		}
+		if jobs[j].id == "maps" {
+			return false
+		}
+		return false
+	})
 	if len(jobs) == 0 && len(settings) == 0 {
 		return ids
 	}

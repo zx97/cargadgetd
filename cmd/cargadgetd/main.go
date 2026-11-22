@@ -181,9 +181,9 @@ func main() {
 		st := wireless.NewStatus()
 		st.SetNames(btName, usbName)
 		if mat.ExpiresIn < 0 {
-			st.SetStatic("Certificat MD", false, fmt.Sprintf("expiré (expires_in=%ds)", mat.ExpiresIn))
+			st.SetStatic("MD certificate", false, fmt.Sprintf("expired (expires_in=%ds)", mat.ExpiresIn))
 		} else {
-			st.SetStatic("Certificat MD", true, fmt.Sprintf("valide (%ds)", mat.ExpiresIn))
+			st.SetStatic("MD certificate", true, fmt.Sprintf("valide (%ds)", mat.ExpiresIn))
 		}
 		ctl := wireless.NewController(wireless.Options{
 			Name:      *wirelessName,

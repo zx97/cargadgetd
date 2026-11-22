@@ -60,6 +60,7 @@ func (c *Controller) Run(ctx context.Context) {
 		attemptStart := time.Now()
 		c.attempts++
 		c.logf("attempt #%d: start (device=%q addr=%q channel=%d)", c.attempts, c.Opt.Name, c.Opt.Address, c.Opt.Channel)
+		c.Status.Step("Attempt #%d", c.attempts)
 
 		runCtx, cancel := context.WithCancel(ctx)
 		c.mu.Lock()
@@ -70,11 +71,13 @@ func (c *Controller) Run(ctx context.Context) {
 		conn, err := Dial(runCtx, c.Opt)
 		if err != nil {
 			c.logf("attempt #%d: FAILED after %s: %v", c.attempts, sinceText(attemptStart), err)
+			c.Status.Step("Failed: %v", err)
 			c.Status.Error(err)
-			c.Status.Set("Connexion", false, err.Error())
+			c.Status.Set("Connection", false, err.Error())
 			c.finish()
 		} else {
 			c.logf("attempt #%d: connected after %s", c.attempts, sinceText(attemptStart))
+			c.Status.Step("Connected in %s", sinceText(attemptStart))
 			c.mu.Lock()
 			c.conn = conn
 			c.mu.Unlock()
@@ -125,7 +128,7 @@ func (c *Controller) finish() {
 		cancel()
 	}
 	c.Status.Running(false)
-	c.Status.Set("Session AA", false, "terminée")
+	c.Status.Set("Android Auto session", false, "ended")
 }
 
 // Start requests a connection attempt. It is a no-op while already running.
@@ -162,7 +165,7 @@ func (c *Controller) Stop() {
 func (c *Controller) JoinWiFi() error {
 	ssid := c.Status.WiFiWant()
 	if ssid == "" {
-		return fmt.Errorf("SSID inconnu : le handshake WPP n'a pas encore livré le nom du réseau")
+		return fmt.Errorf("unknown SSID: the WPP handshake has not delivered the network name yet")
 	}
 	return connmanConnect(ssid)
 }

@@ -5,9 +5,11 @@ package wireless
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +39,10 @@ type USBSnapshot struct {
 	SessionRunning bool
 	// HostPresent is true when the launcher last saw a USB host on the cable.
 	HostPresent bool
+	// AASeen is true when a wired Android Auto session reached the service
+	// discovery. That session is what makes the head unit learn the phone as an
+	// Android Auto device, so it is a one-time step of the procedure.
+	AASeen bool
 	// Log is the tail of the USB daemon log.
 	Log []string
 	// LogPath is where Log came from.
@@ -71,7 +77,49 @@ func USBStatus() USBSnapshot {
 	s.AccessoryLinked = s.VendorID == "0x18d1" || logMentions(s.Log, "linked accessory")
 	s.HostPresent = lastHostPresent(s.Log)
 	s.SessionRunning = usbSessionRunning()
+	s.AASeen = aaSessionSeen()
 	return s
+}
+
+// aaSessionSeen looks for a completed service discovery in the newest wired
+// logs. It reads only the tail of each file: a session writes a few hundred KB
+// at most and the marker is near the start of a session.
+func aaSessionSeen() bool {
+	paths, _ := filepath.Glob("/home/*/cargadgetd*.log")
+	sort.Slice(paths, func(i, j int) bool {
+		fi, erri := os.Stat(paths[i])
+		fj, errj := os.Stat(paths[j])
+		if erri != nil || errj != nil {
+			return false
+		}
+		return fi.ModTime().After(fj.ModTime())
+	})
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		st, err := f.Stat()
+		if err != nil {
+			f.Close()
+			continue
+		}
+		const tail = 256 << 10
+		off := st.Size() - tail
+		if off < 0 {
+			off = 0
+		}
+		if _, err := f.Seek(off, io.SeekStart); err != nil {
+			f.Close()
+			continue
+		}
+		b, _ := io.ReadAll(io.LimitReader(f, tail))
+		f.Close()
+		if strings.Contains(string(b), "session ready (SDR received)") {
+			return true
+		}
+	}
+	return false
 }
 
 func unitState(unit string) string {
@@ -180,7 +228,7 @@ func usbSessionRunning() bool {
 func RepairUSB() error {
 	bin := cfg.Get().Gadget.Bin
 	if bin == "" {
-		return fmt.Errorf("aucun binaire gadget configuré")
+		return fmt.Errorf("no gadget binary configured")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()

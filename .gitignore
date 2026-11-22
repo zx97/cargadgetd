@@ -38,3 +38,9 @@ _out
 ui/sfos/cargadgetd/cargadgetd
 
 dist/
+# Build output of the cross-build script
+/out/
+
+# Local tooling state
+/.codegraph/
+/.opencode/

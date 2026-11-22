@@ -68,9 +68,10 @@ func waitWifi(ctx context.Context, iface, want string, timeout time.Duration, lo
 			logf("wifi: %s now %s at +%s (want %q)", iface, cur, sinceText(start), want)
 			prev = cur
 		}
-		st.Set("Wi-Fi voiture", match && ip != "", fmt.Sprintf("actuel=%q attendu=%q ip=%q", ssid, want, ip))
+		st.Setf("Car Wi-Fi", match && ip != "", "current=%q want=%q ip=%q", ssid, want, ip)
 		if match && ip != "" {
 			logf("wifi: %s ssid=%q ip=%s after %s", iface, ssid, ip, sinceText(start))
+			st.Step("Wi-Fi joined: %q (%s)", ssid, ip)
 			return nil
 		}
 		// A saved network does not switch while another one is preferred.
@@ -84,7 +85,7 @@ func waitWifi(ctx context.Context, iface, want string, timeout time.Duration, lo
 				st.Set("Wi-Fi join", false, err.Error())
 			} else {
 				logf("wifi: join #%d %q accepted by ConnMan in %s", joins, want, sinceText(t))
-				st.Set("Wi-Fi join", true, "demandé à ConnMan")
+				st.Set("Wi-Fi join", true, "requested from ConnMan")
 			}
 		}
 		if time.Since(start) > timeout {

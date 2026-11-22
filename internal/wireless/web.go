@@ -18,14 +18,18 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 			return
 		}
 		snap := s.Snapshot()
+		lang := DetectLang(r)
+		snap.Localize(lang)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		fmt.Fprint(w, renderPage(snap))
+		fmt.Fprint(w, renderPage(lang, snap))
 	})
 
 	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(s.Snapshot())
+		snap := s.Snapshot()
+		snap.Localize(DetectLang(r))
+		_ = json.NewEncoder(w).Encode(snap)
 	})
 
 	mux.HandleFunc("/start", func(w http.ResponseWriter, r *http.Request) {
@@ -47,7 +51,8 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 			restart()
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		fmt.Fprint(w, `<meta http-equiv="refresh" content="2;url=/"><p>Redémarrage…</p>`)
+		fmt.Fprintf(w, `<meta http-equiv="refresh" content="2;url=/"><p>%s</p>`,
+			html.EscapeString(T(DetectLang(r), "Restarting…")))
 	})
 
 	mux.HandleFunc("/usb-fix", func(w http.ResponseWriter, r *http.Request) {
@@ -56,11 +61,11 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 			return
 		}
 		if err := RepairUSB(); err != nil {
-			s.Set("USB réparation", false, err.Error())
+			s.Set("USB repair", false, err.Error())
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		s.Set("USB réparation", true, "service USB relancé")
+		s.Set("USB repair", true, "USB service restarted")
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -69,7 +74,7 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 			if err := joinWiFi(); err != nil {
 				s.Set("Wi-Fi join", false, err.Error())
 			} else {
-				s.Set("Wi-Fi join", true, "demandé à ConnMan")
+				s.Set("Wi-Fi join", true, "requested from ConnMan")
 			}
 		}
 		http.Redirect(w, r, "/", http.StatusSeeOther)
@@ -80,63 +85,112 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 
 // usbText renders the wired-path snapshot as three one-line facts, each with
 // the dot class the page uses.
-func usbText(u USBSnapshot) (svc, mode, sess, svcCls, modeCls, sessCls string) {
-	svc = "Service USB : " + u.ServiceState
+func usbText(lang string, u USBSnapshot) (svc, mode, sess, svcCls, modeCls, sessCls string) {
+	svc = TF(lang, "USB service: %s", orUnknown(lang, u.ServiceState))
 	svcCls = "ko"
 	if u.ServiceState == "active" {
 		svcCls = "ok"
 	}
 	switch u.Mode {
 	case "accessory":
-		mode = fmt.Sprintf("Mode : accessoire AOA (%s) — la voiture peut parler", u.VendorID)
+		mode = TF(lang, "Mode: AOA accessory (%s) — the car can talk", u.VendorID)
 		modeCls = "ok"
 	case "ask":
 		if u.VendorID != "" {
-			mode = fmt.Sprintf("Mode : attente du câble (%s)", u.VendorID)
+			mode = TF(lang, "Mode: waiting for the cable (%s)", u.VendorID)
 		} else {
-			mode = "Mode : attente du câble"
+			mode = T(lang, "Mode: waiting for the cable")
 		}
 		modeCls = "idle"
-	case "inconnu":
-		mode = "Mode : non lisible (configfs root)"
+	case "inconnu", "unknown":
+		mode = T(lang, "Mode: unreadable (configfs is root-only)")
 		modeCls = "idle"
 	default:
-		mode = "Mode : gadget USB absent"
+		mode = T(lang, "Mode: no USB gadget")
 		modeCls = "ko"
 	}
 	if u.AccessoryLinked {
-		mode += " · accessoire lié"
+		mode += " · " + T(lang, "accessory linked")
 	}
 	if u.HostPresent {
-		mode += " · hôte USB branché"
+		mode += " · " + T(lang, "USB host attached")
 	}
-	sess = "Session USB : aucune"
+	sess = T(lang, "USB session: none")
 	sessCls = "idle"
 	if u.SessionRunning {
-		sess = "Session USB : en cours"
+		sess = T(lang, "USB session: running")
 		sessCls = "ok"
 	}
 	return svc, mode, sess, svcCls, modeCls, sessCls
 }
 
-func bannerFor(s Snapshot) (string, string) {
+// orUnknown keeps an empty observed value readable instead of printing
+// "USB service: " with nothing after it.
+func orUnknown(lang, v string) string {
+	if v == "" {
+		return T(lang, "unknown")
+	}
+	return v
+}
+
+// phaseLine is the one-line state summary, translated.
+func phaseLine(lang string, s Snapshot) string {
+	state := T(lang, "stopped")
+	if s.Running {
+		state = T(lang, "active")
+	}
+	phase := s.Phase
+	if phase == "" {
+		phase = "—"
+	}
+	return TF(lang, "state: %s · step: %s", state, phase)
+}
+
+// flowHTML renders the workflow diagram: one row per stage with a mark that
+// tells done / current / failed / pending.
+func flowHTML(stages []Stage) string {
+	var b strings.Builder
+	for _, st := range stages {
+		mark := "·"
+		switch st.State {
+		case "done":
+			mark = "✔"
+		case "current":
+			mark = "▶"
+		case "failed":
+			mark = "✖"
+		}
+		fmt.Fprintf(&b, `<li class="%s"><span class="mark">%s</span><span><span class="lbl">%s</span>`,
+			html.EscapeString(st.State), mark, html.EscapeString(st.Label))
+		if st.Detail != "" {
+			fmt.Fprintf(&b, `<br><span class="det">%s</span>`, html.EscapeString(st.Detail))
+		}
+		b.WriteString(`</span></li>`)
+	}
+	return b.String()
+}
+
+func bannerFor(lang string, s Snapshot) (string, string) {
 	switch {
 	case s.Error != "" && !s.Running:
 		// A car that is off is the normal case at home, not a failure.
-		if strings.Contains(s.Error, "voiture absente") {
-			return "En attente de la voiture", "wait"
+		if strings.Contains(s.Error, "car absent") || strings.Contains(s.Error, "unreachable") {
+			return T(lang, "Waiting for the car"), "wait"
 		}
-		return "Erreur", "ko"
+		if strings.Contains(s.Error, "no paired car") {
+			return T(lang, "Car not paired"), "wait"
+		}
+		return T(lang, "Error"), "ko"
 	case s.Running && s.Phase == "session":
-		return "Android Auto connecté", "ok"
+		return T(lang, "Android Auto connected"), "ok"
 	case s.Running:
-		return "Connexion…", "wait"
+		return T(lang, "Connecting…"), "wait"
 	default:
-		return "Arrêté", "idle"
+		return T(lang, "Stopped"), "idle"
 	}
 }
 
-func renderPage(snap Snapshot) string {
+func renderPage(lang string, snap Snapshot) string {
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -160,6 +214,15 @@ td{padding:7px 6px;border-bottom:1px solid #2a2f3a;vertical-align:top}
 .next.ok{background:#12351f;border-color:#2ecc71}
 .next.wait{background:#3a2b10;border-color:#f39c12}
 .next.action{background:#122534;border-color:#3498db}
+.flow{list-style:none;margin:0 0 12px;padding:0}
+.flow li{display:flex;gap:10px;align-items:flex-start;padding:8px 10px;border-left:3px solid #2a2f3a;margin:0}
+.flow li .mark{width:22px;flex:0 0 22px;text-align:center;font-weight:700}
+.flow li .lbl{font-weight:600}
+.flow li .det{color:#9aa3b2;font-size:.82rem;word-break:break-word}
+.flow li.done{border-left-color:#2ecc71}.flow li.done .mark{color:#2ecc71}
+.flow li.current{border-left-color:#3498db;background:#122534}.flow li.current .mark{color:#3498db}
+.flow li.failed{border-left-color:#e74c3c;background:#2a1414}.flow li.failed .mark{color:#e74c3c}
+.flow li.pending{border-left-color:#2a2f3a;opacity:.55}
 .names{margin:0 0 12px;padding:10px;border-radius:8px;background:#0f1620;border:1px solid #2a2f3a;font-size:.9rem}
 .names b{font-weight:700}
 details.usb{margin:0 0 12px;padding:10px;border-radius:8px;background:#0f1620;border:1px solid #2a2f3a}
@@ -169,46 +232,51 @@ details.usb button{margin:8px 0;padding:10px;font-size:.95rem;border-radius:8px;
 .btns{display:flex;gap:10px;margin:12px 0;flex-wrap:wrap}
 button{flex:1;padding:14px;font-size:1rem;border-radius:10px;border:0;color:#fff}
 .start{background:#2ecc71}.stop{background:#e74c3c}.wifi{background:#3498db}.restart{background:#8e44ad}
+.tabs{display:flex;gap:6px;margin:0 0 10px}
+.tab{flex:1;padding:9px 6px;font-size:.85rem;border:1px solid #2a2f3a;background:#0f1620;color:#9aa3b2;border-radius:8px}
+.tab.active{background:#122534;color:#e7e9ee;border-color:#3498db;font-weight:700}
+.pane{display:none}.pane.active{display:block}
 pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;overflow:auto;font-size:.78rem;white-space:pre-wrap;word-break:break-word}
 </style></head><body>`)
-	b.WriteString("<h1>Cargadgetd Wireless</h1>")
+	fmt.Fprintf(&b, "<h1>%s</h1>", html.EscapeString(T(lang, "Cargadgetd Wireless")))
 
-	banner, cls := bannerFor(snap)
+	banner, cls := snap.Banner, snap.BannerCls
 	fmt.Fprintf(&b, `<div id="banner" class="banner %s">%s</div>`, cls, html.EscapeString(banner))
 
-	fmt.Fprintf(&b, `<div id="next" class="next %s"><div class="t">Quoi faire</div><div id="nextText">%s</div></div>`,
-		html.EscapeString(snap.NextKind), html.EscapeString(snap.Next))
+	fmt.Fprintf(&b, `<div id="next" class="next %s"><div class="t">%s</div><div id="nextText">%s</div></div>`,
+		html.EscapeString(snap.NextKind), html.EscapeString(T(lang, "What to do")), html.EscapeString(snap.Next))
 
+	fmt.Fprintf(&b, `<div class="tabs"><button class="tab active" data-p="state">%s</button><button class="tab" data-p="details">%s</button><button class="tab" data-p="log">%s</button><button class="tab" data-p="usb">%s</button></div>`,
+		html.EscapeString(T(lang, "State")), html.EscapeString(T(lang, "Details")),
+		html.EscapeString(T(lang, "Log")), html.EscapeString(T(lang, "Cable")))
+
+	// State: the workflow diagram and nothing else.
+	b.WriteString(`<div class="pane active" id="p-state">`)
+	b.WriteString(`<ol class="flow" id="flow">`)
+	b.WriteString(flowHTML(snap.Stages))
+	b.WriteString(`</ol>`)
+	fmt.Fprintf(&b, `<div class="phase" id="phase">%s</div>`, html.EscapeString(snap.PhaseLine))
+	b.WriteString(`</div>`)
+
+	// Details: names, error and the check list.
+	b.WriteString(`<div class="pane" id="p-details">`)
 	if snap.BluetoothName != "" || snap.USBName != "" {
 		b.WriteString(`<div class="names">`)
 		if snap.BluetoothName != "" {
-			fmt.Fprintf(&b, `<div>Sans fil, la voiture voit <b>« %s »</b> (nom Bluetooth).</div>`,
+			fmt.Fprintf(&b, `<div>`+T(lang, "Wireless, the car sees %s (Bluetooth name).")+`</div>`,
 				html.EscapeString(snap.BluetoothName))
 		}
 		if snap.USBName != "" {
-			fmt.Fprintf(&b, `<div>Avec le câble, elle voit <b>« %s »</b> (nom USB).</div>`,
+			fmt.Fprintf(&b, `<div>`+T(lang, "With the cable, it sees %s (USB name).")+`</div>`,
 				html.EscapeString(snap.USBName))
 		}
-		b.WriteString(`<div class="detail">C'est le même téléphone. Le câble ne sert qu'à la toute première association.</div></div>`)
+		b.WriteString(`<div class="detail">` + T(lang, "Same phone.") + `</div></div>`)
 	}
-
-	state := "arrêté"
-	if snap.Running {
-		state = "actif"
-	}
-	phase := snap.Phase
-	if phase == "" {
-		phase = "—"
-	}
-	fmt.Fprintf(&b, `<div class="phase" id="phase">état : <b>%s</b> · étape : <b>%s</b></div>`,
-		html.EscapeString(state), html.EscapeString(phase))
-
 	if snap.Error != "" {
 		fmt.Fprintf(&b, `<div id="err" class="err">%s</div>`, html.EscapeString(snap.Error))
 	} else {
 		b.WriteString(`<div id="err" class="err" style="display:none"></div>`)
 	}
-
 	b.WriteString(`<table id="checks">`)
 	for _, c := range snap.Checks {
 		dot := "ko"
@@ -219,23 +287,18 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 			dot, html.EscapeString(c.Name), html.EscapeString(c.Detail))
 	}
 	if len(snap.Checks) == 0 {
-		b.WriteString(`<tr><td colspan="2" class="detail">En attente</td></tr>`)
+		b.WriteString(`<tr><td colspan="2" class="detail">` + T(lang, "Waiting") + `</td></tr>`)
 	}
-	b.WriteString(`</table>`)
+	b.WriteString(`</table></div>`)
 
-	b.WriteString(`<div class="btns">
-<form method="post" action="/start" style="flex:1"><button class="start" type="submit">Démarrer</button></form>
-<form method="post" action="/stop" style="flex:1"><button class="stop" type="submit">Arrêter</button></form>
-<form method="post" action="/restart" style="flex:1"><button class="restart" type="submit">Redémarrer</button></form>
-</div>`)
-
-	if snap.WiFiWant != "" {
-		fmt.Fprintf(&b, `<form id="wifiForm" method="post" action="/wifi"><button id="wifiBtn" class="wifi" type="submit" style="width:100%%">Rejoindre le Wi-Fi %s</button></form>`,
-			html.EscapeString(snap.WiFiWant))
-	} else {
-		b.WriteString(`<form id="wifiForm" method="post" action="/wifi" style="display:none"><button id="wifiBtn" class="wifi" type="submit" style="width:100%">Rejoindre le Wi-Fi</button></form>`)
+	// Log: what the daemon discovered and did, plus the WPP exchange.
+	b.WriteString(`<div class="pane" id="p-log">`)
+	b.WriteString(`<pre id="steps">`)
+	for _, line := range snap.Steps {
+		b.WriteString(html.EscapeString(line))
+		b.WriteByte('\n')
 	}
-
+	b.WriteString(`</pre>`)
 	if len(snap.WPP) > 0 {
 		b.WriteString(`<pre id="wpp">`)
 		for _, line := range snap.WPP {
@@ -246,12 +309,11 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 	} else {
 		b.WriteString(`<pre id="wpp" style="display:none"></pre>`)
 	}
+	b.WriteString(`</div>`)
 
-	// Wired path: observed from the outside. The launcher being stopped is the
-	// state that looks like "the car refuses the phone", so it is visible here
-	// with a one-tap repair.
-	svc, mode, sess, svcCls, modeCls, sessCls := usbText(snap.USB)
-	b.WriteString(`<details class="usb" open><summary>Câble USB</summary>`)
+	// Cable: the wired path, observed from the outside.
+	b.WriteString(`<div class="pane" id="p-usb">`)
+	svc, mode, sess, svcCls, modeCls, sessCls := snap.USBSvc, snap.USBMode, snap.USBSess, snap.USBSvcCls, snap.USBModeCls, snap.USBSessCls
 	fmt.Fprintf(&b, `<div class="row"><span class="dot %s" id="usbSvcDot"></span><span id="usbSvc">%s</span></div>`,
 		svcCls, html.EscapeString(svc))
 	fmt.Fprintf(&b, `<div class="row"><span class="dot %s" id="usbModeDot"></span><span id="usbMode">%s</span></div>`,
@@ -259,16 +321,31 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 	fmt.Fprintf(&b, `<div class="row"><span class="dot %s" id="usbSessDot"></span><span id="usbSess">%s</span></div>`,
 		sessCls, html.EscapeString(sess))
 	if snap.USB.Transport != "usb" {
-		fmt.Fprintf(&b, `<div class="row detail">Transport configuré : %s (le câble est ignoré).</div>`,
-			html.EscapeString(snap.USB.Transport))
+		fmt.Fprintf(&b, `<div class="row detail">%s</div>`,
+			html.EscapeString(TF(lang, "Configured transport: %s (the cable is ignored).", snap.USB.Transport)))
 	}
-	b.WriteString(`<button id="usbFix" type="button">Réparer l'USB</button>`)
+	fmt.Fprintf(&b, `<button id="usbFix" type="button" data-busy="%s">%s</button>`,
+		html.EscapeString(T(lang, "Repairing…")), html.EscapeString(T(lang, "Repair USB")))
 	b.WriteString(`<pre id="usbLog" style="margin-top:6px">`)
 	for _, line := range snap.USB.Log {
 		b.WriteString(html.EscapeString(line))
 		b.WriteByte('\n')
 	}
-	b.WriteString(`</pre></details>`)
+	b.WriteString(`</pre></div>`)
+
+	// Actions, always reachable whatever the tab.
+	b.WriteString(`<div class="btns">
+<form method="post" action="/start" style="flex:1"><button class="start" type="submit">` + T(lang, "Start") + `</button></form>
+<form method="post" action="/stop" style="flex:1"><button class="stop" type="submit">` + T(lang, "Stop") + `</button></form>
+<form method="post" action="/restart" style="flex:1"><button class="restart" type="submit">` + T(lang, "Restart") + `</button></form>
+</div>`)
+
+	if snap.WiFiWant != "" {
+		fmt.Fprintf(&b, `<form id="wifiForm" method="post" action="/wifi"><button id="wifiBtn" class="wifi" type="submit" style="width:100%%">`+T(lang, "Join Wi-Fi %s")+`</button></form>`,
+			html.EscapeString(snap.WiFiWant))
+	} else {
+		b.WriteString(`<form id="wifiForm" method="post" action="/wifi" style="display:none"><button id="wifiBtn" class="wifi" type="submit" style="width:100%">` + T(lang, "Join Wi-Fi") + `</button></form>`)
+	}
 
 	b.WriteString(pageScript)
 	b.WriteString(wireUSBFix)
@@ -277,9 +354,17 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 }
 
 // pageScript polls /status every second and updates the DOM in place, so the
-// page never reloads (a meta refresh flickered badly on the phone).
+// page never reloads (a meta refresh flickered badly on the phone). It carries
+// no text of its own: every label comes from the JSON, already translated
+// server-side, so the same script serves every language.
 const pageScript = `<script>
 const $=id=>document.getElementById(id);
+document.querySelectorAll('.tab').forEach(t=>t.addEventListener('click',()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'));
+  document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
+  t.classList.add('active');
+  const p=document.getElementById('p-'+t.dataset.p); if(p) p.classList.add('active');
+}));
 let last='';
 async function tick(){
   let txt;
@@ -288,18 +373,10 @@ async function tick(){
   last=txt;
   let s;
   try { s = JSON.parse(txt); } catch(e) { return; }
-  let text='Arrêté', cls='idle';
-  if (s.Error && !s.Running) {
-    if (s.Error.indexOf('voiture absente')>=0) { text='En attente de la voiture'; cls='wait'; }
-    else if (s.Error.indexOf('aucune voiture appair')>=0) { text='Voiture non appairée'; cls='wait'; }
-    else { text='Erreur'; cls='ko'; }
-  }
-  else if (s.Running && s.Phase==='session') { text='Android Auto connecté'; cls='ok'; }
-  else if (s.Running) { text='Connexion…'; cls='wait'; }
   const b=$('banner');
-  if(b){ b.textContent=text; b.className='banner '+cls; }
+  if(b){ b.textContent=s.Banner||''; b.className='banner '+(s.BannerCls||'idle'); }
   const p=$('phase');
-  if(p){ p.textContent='état : '+(s.Running?'actif':'arrêté')+' · étape : '+(s.Phase||'—'); }
+  if(p){ p.textContent=s.PhaseLine||''; }
   const nx=$('next');
   if(nx){
     nx.className='next '+(s.NextKind||'wait');
@@ -314,7 +391,7 @@ async function tick(){
     if(!checks.length){
       const tr=document.createElement('tr');
       const td=document.createElement('td');
-      td.colSpan=2; td.className='detail'; td.textContent='En attente';
+      td.colSpan=2; td.className='detail'; td.textContent=s.Waiting||'';
       tr.appendChild(td); t.appendChild(tr);
     }
     for(const c of checks){
@@ -329,45 +406,53 @@ async function tick(){
   }
   const wf=$('wifiForm');
   if(wf){
-    if(s.WiFiWant){ wf.style.display=''; const wb=$('wifiBtn'); if(wb) wb.textContent='Rejoindre le Wi-Fi '+s.WiFiWant; }
+    if(s.WiFiWant){ wf.style.display=''; const wb=$('wifiBtn'); if(wb) wb.textContent=s.WiFiLabel||''; }
     else { wf.style.display='none'; }
   }
+  const fl=$('flow');
+  if(fl){
+    const marks={done:'✔',current:'▶',failed:'✖',pending:'·'};
+    fl.textContent='';
+    for(const st of (s.Stages||[])){
+      const li=document.createElement('li'); li.className=st.State||'pending';
+      const mk=document.createElement('span'); mk.className='mark'; mk.textContent=marks[st.State]||'·';
+      const box=document.createElement('span');
+      const lbl=document.createElement('span'); lbl.className='lbl'; lbl.textContent=st.Label;
+      box.appendChild(lbl);
+      if(st.Detail){ const br=document.createElement('br'); const det=document.createElement('span'); det.className='det'; det.textContent=st.Detail; box.appendChild(br); box.appendChild(det); }
+      li.appendChild(mk); li.appendChild(box); fl.appendChild(li);
+    }
+  }
+  const stp=$('steps');
+  if(stp){ stp.textContent=(s.Steps||[]).join(String.fromCharCode(10)); }
   const w=$('wpp');
   if(w){
-    if(s.WPP && s.WPP.length){ w.textContent=s.WPP.join('\n'); w.style.display=''; }
+    if(s.WPP && s.WPP.length){ w.textContent=s.WPP.join(String.fromCharCode(10)); w.style.display=''; }
     else { w.style.display='none'; }
   }
-  const u=s.USB||{};
-  const setRow=(dotId,textId,cls,text)=>{const d=$(dotId); if(d) d.className='dot '+cls; const t=$(textId); if(t) t.textContent=text;};
-  const svcText='Service USB : '+(u.ServiceState||'inconnu');
-  const svcCls=u.ServiceState==='active'?'ok':'ko';
-  let modeText='Mode : gadget USB absent', modeCls='ko';
-  if(u.Mode==='accessory'){ modeText='Mode : accessoire AOA ('+(u.VendorID||'')+') — la voiture peut parler'; modeCls='ok'; }
-  else if(u.Mode==='ask'){ modeText=u.VendorID?('Mode : attente du câble ('+u.VendorID+')'):'Mode : attente du câble'; modeCls='idle'; }
-  else if(u.Mode==='inconnu'){ modeText='Mode : non lisible (configfs root)'; modeCls='idle'; }
-  if(u.AccessoryLinked) modeText+=' · accessoire lié';
-  if(u.HostPresent) modeText+=' · hôte USB branché';
-  const sessText=u.SessionRunning?'Session USB : en cours':'Session USB : aucune';
-  setRow('usbSvcDot','usbSvc',svcCls,svcText);
-  setRow('usbModeDot','usbMode',modeCls,modeText);
-  setRow('usbSessDot','usbSess',u.SessionRunning?'ok':'idle',sessText);
+  const setRow=(dotId,textId,cls,text)=>{const d=$(dotId); if(d) d.className='dot '+(cls||'idle'); const x=$(textId); if(x) x.textContent=text||'';};
+  setRow('usbSvcDot','usbSvc',s.USBSvcCls,s.USBSvc);
+  setRow('usbModeDot','usbMode',s.USBModeCls,s.USBMode);
+  setRow('usbSessDot','usbSess',s.USBSessCls,s.USBSess);
   const ul=$('usbLog');
-  if(ul){ ul.textContent=(u.Log||[]).join('\n'); }
+  if(ul){ ul.textContent=(s.USB&&s.USB.Log||[]).join(String.fromCharCode(10)); }
 }
 tick();
 setInterval(tick, 1000);
 </script>`
 
 // wireUSBFix makes the repair button a background POST: the page then updates
-// from the next /status poll instead of reloading.
+// from the next /status poll instead of reloading. The busy label is a data
+// attribute written by the server, so this script stays language-neutral.
 const wireUSBFix = `<script>
 (function(){
   const b=document.getElementById('usbFix');
   if(!b) return;
   b.addEventListener('click', async function(){
-    b.disabled=true; const old=b.textContent; b.textContent='Réparation…';
+    b.disabled=true; const old=b.textContent;
+    b.textContent=b.dataset.busy||old;
     try { await fetch('/usb-fix',{method:'POST'}); } catch(e) {}
-    setTimeout(()=>{ b.disabled=false; b.textContent=old; }, 1500);
+    setTimeout(function(){ b.disabled=false; b.textContent=old; }, 1500);
   });
 })();
 </script>`
