@@ -44,3 +44,6 @@ dist/
 # Local tooling state
 /.codegraph/
 /.opencode/
+
+# User photos kept locally, never published
+/pictures_to_be_ignored_by_git/
