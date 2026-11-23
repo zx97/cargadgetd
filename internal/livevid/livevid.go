@@ -49,6 +49,15 @@ type Renderer struct {
 	chokeStart time.Time
 	chokeN     int
 	healthy    int
+
+	// abandoned holds encoders that stopped answering. They are never Closed:
+	// the call inside the codec may still be running, and droid_close on a
+	// wedged Codec2 blocks as well.
+	abandoned  map[codec]bool
+	recoveries int
+	// fatalErr latches the reason the encoder gave up, so every later frame
+	// reports it instead of a generic "closed".
+	fatalErr error
 }
 
 // Options configure the live encoder.
@@ -97,6 +106,7 @@ func New(opts Options) (*Renderer, error) {
 		want:    opts.Encoder,
 	}
 	r.ceiling = r.bps
+	r.abandoned = map[codec]bool{}
 	if err := r.openEncoder(); err != nil {
 		return nil, err
 	}
@@ -122,7 +132,8 @@ func (r *Renderer) openEncoder() error {
 	return nil
 }
 
-// Close frees the encoder.
+// Close frees the encoder. An abandoned (wedged) encoder is skipped: calling
+// Close on it would block the same way the frame did.
 func (r *Renderer) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -153,6 +164,9 @@ func (r *Renderer) Encode(now time.Time) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if r.fatalErr != nil {
+		return nil, r.fatalErr
+	}
 	if r.enc == nil {
 		return nil, fmt.Errorf("livevid: closed")
 	}
@@ -162,11 +176,60 @@ func (r *Renderer) Encode(now time.Time) ([]byte, error) {
 	return r.encodeLocked()
 }
 
+// EncodeStall is how long one codec call may run before the encoder is
+// declared wedged. Codec2 occasionally stops returning from the push, and the
+// old code simply waited forever: no frame, no ack, no session, no log.
+var EncodeStall = 2 * time.Second
+
+// MaxEncodeRecovery bounds how many encoders are rebuilt per session. Past
+// that the hardware is not coming back and the session should restart.
+const MaxEncodeRecovery = 3
+
+// encodeLocked runs the codec call with a deadline. On a stall the encoder is
+// abandoned, a fresh one is created, and the frame is dropped: the next frame
+// is a keyframe from the new encoder, so the picture comes back instead of
+// freezing until the session is torn down.
 func (r *Renderer) encodeLocked() ([]byte, error) {
-	au, err := r.enc.Encode(r.rgba)
-	if err != nil {
-		return nil, err
+	if r.fatalErr != nil {
+		return nil, r.fatalErr
 	}
+	if r.enc == nil {
+		return nil, fmt.Errorf("livevid: closed")
+	}
+	enc := r.enc
+	type result struct {
+		au  []byte
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		au, err := enc.Encode(r.rgba)
+		done <- result{au, err}
+	}()
+	select {
+	case out := <-done:
+		if out.err != nil {
+			return nil, out.err
+		}
+		return r.acceptLocked(out.au)
+	case <-time.After(EncodeStall):
+		r.recoveries++
+		r.abandoned[enc] = true
+		r.enc = nil
+		log.Printf("livevid: encoder stalled for %s — abandoning it (%d/%d)", EncodeStall, r.recoveries, MaxEncodeRecovery)
+		if r.recoveries > MaxEncodeRecovery {
+			r.fatalErr = fmt.Errorf("livevid: encoder stalled %d times, ending the session", r.recoveries)
+			return nil, r.fatalErr
+		}
+		if err := r.openEncoder(); err != nil {
+			return nil, fmt.Errorf("livevid: encoder rebuild: %w", err)
+		}
+		return nil, fmt.Errorf("livevid: encoder stalled, rebuilt")
+	}
+}
+
+// acceptLocked validates the access unit and hands it back.
+func (r *Renderer) acceptLocked(au []byte) ([]byte, error) {
 	if len(au) == 0 {
 		return nil, fmt.Errorf("livevid: empty AU")
 	}
