@@ -44,6 +44,9 @@ func main() {
 	aoaService := flag.String("aoa-service", "", "start, stop, or restart cargadgetd-aoa.service (setuid)")
 	wifiConnect := flag.String("wifi-connect", "", "connect a saved Wi-Fi service (setuid root) and exit")
 	btAdapter := flag.String("bt-adapter", "", "power and expose a BlueZ adapter, e.g. /org/bluez/hci1 (setuid root) and exit")
+	btPair := flag.String("bt-pair", "", "pair a head unit by Bluetooth address, answering its PIN (setuid root) and exit")
+	btUnpair := flag.String("bt-unpair", "", "forget a Bluetooth bond (setuid root) and exit")
+	btPin := flag.String("bt-pin", "0000", "PIN to send when the head unit asks for one")
 	flag.Parse()
 
 	// The car names the USB entry after the gadget product string: use the
@@ -70,6 +73,25 @@ func main() {
 		}
 		if err := wireless.AdapterSetup(dbus.ObjectPath(*btAdapter)); err != nil {
 			log.Fatal(err)
+		}
+		return
+	}
+
+	if *btPair != "" || *btUnpair != "" {
+		if os.Geteuid() != 0 {
+			log.Fatal("gadgetctl -bt-pair/-bt-unpair needs root (install setuid RPM or use devel-su)")
+		}
+		if err := becomeRoot(); err != nil {
+			log.Fatalf("become root: %v", err)
+		}
+		if *btUnpair != "" {
+			if err := wireless.UnpairDevice(*btUnpair, log.Printf); err != nil {
+				log.Fatal(err)
+			}
+			return
+		}
+		if err := wireless.PairDevice(*btPair, *btPin, log.Printf); err != nil {
+			log.Fatalf("pairing %s: %v", *btPair, err)
 		}
 		return
 	}
