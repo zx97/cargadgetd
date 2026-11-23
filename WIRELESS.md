@@ -439,10 +439,23 @@ What it teaches:
   session stops, the unit itself does not reboot.
 - **Wired Android Auto works** with our stream (version 1.3, SDR, 1280x720,
   touch and audio), which validates the AVC pipeline on a second decoder.
-- **No wireless Android Auto service**: SDP (PSM 1) and RFCOMM 7/8/9 are
-  refused while a real Android phone connects wirelessly. Either the AA half is
-  wired-only and wireless is CarPlay, or the AA channel is outside 7–9 — the
-  probe now scans 1–30 when SDP fails.
+- **Wireless Android Auto works, on RFCOMM channel 1.** SDP (PSM 1) is refused
+  and 7/8/9 are refused too, which is why the probe looked like a dead end until
+  it scanned 1–30: the service answers on channel **1**. The rest of the flow is
+  the standard one: WPP gives `ssid=carplay_wifi_XXXX`, `key=12345678`,
+  `security=8`, then `StartRequest` with `192.168.43.1:6730`, the phone joins the
+  AP and the TLS session runs.
+- **Its SSID is new at every session** (`34A5`, `B2AB`, `DC02`, `5059`, `0D60`)
+  and the wireless mode times out quickly, so the join has to happen within
+  seconds of the WPP exchange — no room for a 90s SDP-first cycle.
+- **ConnMan must do the join.** On Sailfish `connmand` runs with
+  `--noplugin=wifi` and `/var/lib/connman` does not exist, so a provisioning file
+  is impossible, and `Service.Connect` on an unsaved AP is refused
+  ("no saved wifi service"). What works is a `net.connman.Agent` that answers
+  `RequestInput("Passphrase")`: ConnMan then associates, runs DHCP, sets the
+  route and updates its own UI. Associating through wpa_supplicant directly does
+  connect, but leaves ConnMan unaware: the interface keeps its previous address,
+  the UI still shows the old network, and the TCP dial goes out the wrong route.
 - The pairing PIN it displays (`0000`) is not what is used: BlueZ pairs with
   the six-digit numeric comparison and `gadgetctl -bt-pair` confirms it. What
   broke pairing was a stale bond, not the PIN length.

@@ -5,6 +5,7 @@ package wireless
 import (
 	"context"
 	"fmt"
+	"net"
 	"strings"
 	"time"
 )
@@ -38,6 +39,7 @@ func fullScan() []uint8 {
 // often refuses while its baseband link is not fully up.
 func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any)) (uint8, error) {
 	down := 0
+	hangs := 0
 	channels := append(append([]uint8{}, candidateAAChannels...), fullScan()...)
 	for i, ch := range channels {
 		if ctx.Err() != nil {
@@ -50,7 +52,31 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 			pause = 200 * time.Millisecond
 		}
 		t := time.Now()
-		rc, err := dialRFCOMM(addr, ch, logf)
+		// The SABM for a channel with no listener can hang past the controller's
+		// own timeout on this stack, which stalled the whole scan at channel 9.
+		// Bound each attempt and go on to the next channel.
+		type dialResult struct {
+			rc  net.Conn
+			err error
+		}
+		done := make(chan dialResult, 1)
+		go func(ch uint8) {
+			rc, err := dialRFCOMM(addr, ch, logf)
+			done <- dialResult{rc, err}
+		}(ch)
+		var rc net.Conn
+		var err error
+		select {
+		case r := <-done:
+			rc, err = r.rc, r.err
+		case <-time.After(4 * time.Second):
+			hangs++
+			logf("probe: channel %d: no answer within 4s, skipping", ch)
+			if hangs >= 8 {
+				return 0, fmt.Errorf("probe: %d channels never answered, the controller is not responding", hangs)
+			}
+			continue
+		}
 		if err != nil {
 			logf("probe: channel %d: connect failed after %s: %v", ch, sinceText(t), err)
 			// A page timeout means the baseband link is not up: probing the
@@ -66,19 +92,40 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 			continue
 		}
 		down = 0
-		_ = rc.SetReadDeadline(time.Now().Add(2 * time.Second))
-		werr := writeWPP(rc, wppInfoRequest, nil)
-		answered := false
-		if werr == nil {
-			buf := make([]byte, 4)
-			if n, rerr := rc.Read(buf); rerr == nil && n == 4 {
-				answered = true
+		logf("probe: channel %d: connected, asking for WPP", ch)
+		// Deadlines are not honoured here: the RFCOMM fd is a plain file to the
+		// Go runtime, so a read on a channel that accepted and then stays
+		// silent blocks the whole scan. Bound it with a goroutine instead.
+		type wppResult struct {
+			werr     error
+			answered bool
+		}
+		wres := make(chan wppResult, 1)
+		go func(rc net.Conn) {
+			_ = rc.SetReadDeadline(time.Now().Add(2 * time.Second))
+			werr := writeWPP(rc, wppInfoRequest, nil)
+			answered := false
+			if werr == nil {
+				buf := make([]byte, 4)
+				if n, rerr := rc.Read(buf); rerr == nil && n == 4 {
+					answered = true
+				}
 			}
+			wres <- wppResult{werr, answered}
+		}(rc)
+		var werr error
+		answered := false
+		select {
+		case r := <-wres:
+			werr, answered = r.werr, r.answered
+		case <-time.After(3 * time.Second):
+			logf("probe: channel %d: opened but no WPP answer within 3s", ch)
+			werr = fmt.Errorf("no WPP answer")
 		}
 		rc.Close()
 		time.Sleep(pause)
 		if werr != nil {
-			logf("probe: channel %d: write failed after %s: %v", ch, sinceText(t), werr)
+			logf("probe: channel %d: no WPP answer after %s: %v", ch, sinceText(t), werr)
 			continue
 		}
 		if answered {

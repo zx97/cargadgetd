@@ -53,9 +53,9 @@ func logWiFi(iface string, logf func(string, ...any)) {
 }
 
 // waitWifi blocks until iface is associated with want and has an IPv4 address.
-// The phone keeps the car's AP as a saved network, so ConnMan normally joins it
-// when the head unit brings the AP up.
-func waitWifi(ctx context.Context, iface, want string, timeout time.Duration, logf func(string, ...any), st *Status) error {
+// psk comes from the WPP handshake: with it the AP is provisioned on the spot,
+// which is what a head unit whose SSID changes between sessions needs.
+func waitWifi(ctx context.Context, iface, want, psk, wantIPPrefix string, timeout time.Duration, logf func(string, ...any), st *Status) error {
 	start := time.Now()
 	nextJoin := start
 	prev := ""
@@ -64,12 +64,16 @@ func waitWifi(ctx context.Context, iface, want string, timeout time.Duration, lo
 		ssid := wifiSSID(iface)
 		ip := wifiIPv4(iface)
 		match := want == "" || strings.EqualFold(ssid, want)
+		// The address must come from the head unit's own network: after a join
+		// the interface keeps its previous lease for a moment, and taking that
+		// as success made the TCP dial leave through the home router.
+		ipOK := ip != "" && (wantIPPrefix == "" || strings.HasPrefix(ip, wantIPPrefix))
 		if cur := fmt.Sprintf("ssid=%q ip=%q", ssid, ip); cur != prev {
 			logf("wifi: %s now %s at +%s (want %q)", iface, cur, sinceText(start), want)
 			prev = cur
 		}
-		st.Setf("Car Wi-Fi", match && ip != "", "current=%q want=%q ip=%q", ssid, want, ip)
-		if match && ip != "" {
+		st.Setf("Car Wi-Fi", match && ipOK, "current=%q want=%q ip=%q", ssid, want, ip)
+		if match && ipOK {
 			logf("wifi: %s ssid=%q ip=%s after %s", iface, ssid, ip, sinceText(start))
 			st.Step("Wi-Fi joined: %q (%s)", ssid, ip)
 			return nil
@@ -80,7 +84,7 @@ func waitWifi(ctx context.Context, iface, want string, timeout time.Duration, lo
 			nextJoin = time.Now().Add(10 * time.Second)
 			joins++
 			t := time.Now()
-			if err := connmanConnect(want); err != nil {
+			if err := connmanJoin(want, psk); err != nil {
 				logf("wifi: join #%d %q failed after %s: %v", joins, want, sinceText(t), err)
 				st.Set("Wi-Fi join", false, err.Error())
 			} else {

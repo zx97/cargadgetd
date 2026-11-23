@@ -3,6 +3,7 @@ package wireless
 import (
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 
@@ -10,7 +11,12 @@ import (
 	"github.com/godbus/dbus/v5"
 )
 
-const connmanService = "net.connman"
+const (
+	connmanService = "net.connman"
+	wpaService     = "fi.w1.wpa_supplicant1"
+)
+
+var wpaPath = dbus.ObjectPath("/fi/w1/wpa_supplicant1")
 
 // connmanNetService is one of ConnMan's network services.
 type connmanNetService struct {
@@ -112,6 +118,31 @@ func connmanConnect(ssid string) error {
 	return friendlyWiFiError(ssid, connmanConnectDirect(ssid))
 }
 
+// connmanJoin connects ssid, provisioning it when psk is known. The passphrase
+// travels in the environment of the setuid helper: its command line is public,
+// its environment is root-only.
+func connmanJoin(ssid, psk string) error {
+	if psk == "" {
+		return connmanConnect(ssid)
+	}
+	bin := cfg.Get().Gadget.Bin
+	if bin == "" {
+		return connmanConnect(ssid)
+	}
+	cmd := exec.Command(bin, "-wifi-join", ssid)
+	cmd.Env = append(os.Environ(), "CARGADGETD_WIFI_PSK="+psk)
+	out, err := cmd.CombinedOutput()
+	msg := strings.TrimSpace(string(out))
+	if err == nil {
+		return nil
+	}
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || strings.Contains(msg, "needs root") {
+		return connmanConnect(ssid)
+	}
+	return friendlyWiFiError(ssid, connmanErrorFromHelper(msg))
+}
+
 // connmanErrorFromHelper drops the log timestamp/prefix added by the helper.
 func connmanErrorFromHelper(out string) error {
 	lines := strings.Split(strings.TrimSpace(out), "\n")
@@ -142,6 +173,131 @@ func friendlyWiFiError(ssid string, err error) error {
 // ConnectWiFi is the direct ConnMan connect used by the setuid helper (root).
 func ConnectWiFi(ssid string) error {
 	return connmanConnectDirect(ssid)
+}
+
+// JoinWiFi connects the head unit's access point, adding it to wpa_supplicant
+// with the passphrase the WPP handshake delivered.
+//
+// ConnMan file provisioning does not exist on Sailfish: /var/lib/connman is
+// absent (connmand runs without its wifi plugin) and an unsaved AP is refused
+// with "no saved wifi service". wpa_supplicant is what really associates, it
+// runs on the system bus, and the setuid helper reaches it as root.
+func JoinWiFi(ssid, passphrase string) error {
+	if strings.TrimSpace(ssid) == "" {
+		return fmt.Errorf("connman: empty ssid")
+	}
+	// ConnMan does the association, DHCP, route and its own UI bookkeeping.
+	if err := JoinWithAgent(ssid, passphrase, nil); err == nil {
+		return nil
+	} else if passphrase == "" {
+		// An open network has no passphrase prompt to answer; the saved-service
+		// path is enough there.
+		return connmanConnectDirect(ssid)
+	} else {
+		// Fallback: associate through wpa_supplicant, which works but leaves
+		// ConnMan unaware (no DHCP, stale UI), so nothing else should rely on it.
+		if werr := wpaJoin(ssid, passphrase); werr != nil {
+			return fmt.Errorf("connman: %v (wpa fallback: %v)", err, werr)
+		}
+		return nil
+	}
+}
+
+// wpaJoin adds the network to the running wpa_supplicant and selects it, which
+// starts the association immediately.
+func wpaJoin(ssid, passphrase string) error {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return fmt.Errorf("wpa: system bus: %w", err)
+	}
+	root := conn.Object(wpaService, wpaPath)
+
+	var ifacePath dbus.ObjectPath
+	if err := root.Call("fi.w1.wpa_supplicant1.GetInterface", 0, "wlan0").Store(&ifacePath); err != nil {
+		var v dbus.Variant
+		if perr := root.Call("org.freedesktop.DBus.Properties.Get", 0,
+			"fi.w1.wpa_supplicant1", "Interfaces").Store(&v); perr != nil {
+			return fmt.Errorf("wpa: no interface (GetInterface: %v)", err)
+		}
+		ifaces, _ := v.Value().([]dbus.ObjectPath)
+		if len(ifaces) == 0 {
+			return fmt.Errorf("wpa: no interface at all")
+		}
+		ifacePath = ifaces[0]
+	}
+
+	// This head unit regenerates its SSID every session (carplay_wifi_34A5,
+	// B2AB, DC02, 5059, 0D60 …). Left alone, wpa_supplicant keeps one network
+	// per SSID and the phone's Wi-Fi list fills with dead carplay entries.
+	// Drop the stale ones before adding today's.
+	iface0 := conn.Object(wpaService, ifacePath)
+	var vnets dbus.Variant
+	if err := iface0.Call("org.freedesktop.DBus.Properties.Get", 0,
+		"fi.w1.wpa_supplicant1.Interface", "Networks").Store(&vnets); err == nil {
+		nets, _ := vnets.Value().([]dbus.ObjectPath)
+		for _, n := range nets {
+			var props map[string]dbus.Variant
+			if err := conn.Object(wpaService, n).Call("org.freedesktop.DBus.Properties.GetAll", 0,
+				"fi.w1.wpa_supplicant1.Network").Store(&props); err != nil {
+				continue
+			}
+			b, _ := props["ssid"].Value().([]byte)
+			name := string(b)
+			if name == ssid {
+				// Already configured: just select it.
+				if err := iface0.Call("fi.w1.wpa_supplicant1.Interface.SelectNetwork", 0, n).Err; err == nil {
+					return nil
+				}
+				break
+			}
+			if strings.HasPrefix(name, "carplay_wifi") {
+				if err := iface0.Call("fi.w1.wpa_supplicant1.Interface.RemoveNetwork", 0, n).Err; err == nil {
+					continue
+				}
+			}
+		}
+	}
+
+	args := map[string]dbus.Variant{
+		"ssid": dbus.MakeVariant([]byte(ssid)),
+	}
+	if passphrase == "" {
+		args["key_mgmt"] = dbus.MakeVariant("NONE")
+	} else {
+		args["key_mgmt"] = dbus.MakeVariant("WPA-PSK")
+		args["psk"] = dbus.MakeVariant(passphrase)
+	}
+	iface := conn.Object(wpaService, ifacePath)
+	var netPath dbus.ObjectPath
+	if err := iface.Call("fi.w1.wpa_supplicant1.Interface.AddNetwork", 0, args).Store(&netPath); err != nil {
+		return fmt.Errorf("wpa: add network %q: %w", ssid, err)
+	}
+	if err := iface.Call("fi.w1.wpa_supplicant1.Interface.SelectNetwork", 0, netPath).Err; err != nil {
+		return fmt.Errorf("wpa: select %q: %w", ssid, err)
+	}
+	return nil
+}
+
+// connmanScan asks ConnMan for a Wi-Fi scan, so a head unit's fresh AP shows up
+// in its service list.
+func connmanScan() {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return
+	}
+	var techs []struct {
+		Path  dbus.ObjectPath
+		Props map[string]dbus.Variant
+	}
+	if err := conn.Object(connmanService, "/").
+		Call("net.connman.Manager.GetTechnologies", 0).Store(&techs); err != nil {
+		return
+	}
+	for _, t := range techs {
+		if variantString(t.Props["Type"]) == "wifi" {
+			_ = conn.Object(connmanService, t.Path).Call("net.connman.Technology.Scan", 0).Err
+		}
+	}
 }
 
 func connmanConnectDirect(ssid string) error {

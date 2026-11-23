@@ -146,7 +146,11 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		conns = c
 		st.Set("Android Auto profile", true, "registered, waiting for the car")
 		st.Phase("profile")
-		waitFor := 30 * time.Second
+		// A head unit that dials us does it within a couple of seconds of the
+		// link coming up; waiting 30s costs the whole wireless window of units
+		// that regenerate their SSID (the lab unit drops out of AA mode after
+		// about a minute).
+		waitFor := 6 * time.Second
 		if opt.Passive {
 			waitFor = 5 * time.Minute
 		}
@@ -259,36 +263,40 @@ func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, g
 
 	channel := opt.Channel
 	if channel == 0 {
+		// Probe first: our SDP client is refused by most of these units and each
+		// attempt costs 12-22s, while a refused RFCOMM channel comes back in
+		// ~40ms. The lab unit answers on channel 1; the VW on 7.
 		st.Phase("sdp")
-		for attempt := 1; attempt <= 3; attempt++ {
-			if rc, ok := acceptIncoming("during the SDP lookup"); ok {
-				return handshake(ctx, rc, opt, st, guess)
-			}
-			t = time.Now()
-			ch, err := sdpRFCOMMChannel(cand.Address, opt.logf)
-			if err == nil {
-				channel = ch
-				st.Setf("RFCOMM channel", true, "channel %d", ch)
-				opt.logf("sdp: Android Auto RFCOMM channel %d (attempt %d took %s)", ch, attempt, sinceText(t))
-				st.Step("RFCOMM channel %d found over SDP", ch)
-				break
-			}
-			st.Set("RFCOMM channel", false, err.Error())
-			opt.logf("sdp: attempt %d failed after %s: %v", attempt, sinceText(t), err)
-			time.Sleep(3 * time.Second)
-		}
-		if channel == 0 {
-			// SDP was refused (usually the baseband link is not fully up yet).
-			// Do not guess: ask the head unit itself which channel speaks WPP.
-			st.Set("RFCOMM channel", false, "SDP unavailable, probing channels")
-			ch, perr := probeAAChannel(ctx, cand.Address, opt.logf)
-			if perr != nil {
-				st.Set("RFCOMM channel", false, perr.Error())
-				return nil, perr
-			}
+		st.Set("RFCOMM channel", false, "probing channels")
+		ch, perr := probeAAChannel(ctx, cand.Address, opt.logf)
+		if perr == nil {
 			channel = ch
 			st.Setf("RFCOMM channel", true, "channel %d (WPP probe)", ch)
 			st.Step("RFCOMM channel %d found by probing", ch)
+		} else {
+			st.Set("RFCOMM channel", false, perr.Error())
+			opt.logf("probe: %v", perr)
+			// Some head units refuse RFCOMM probing while SDP still answers.
+			for attempt := 1; attempt <= 2 && channel == 0; attempt++ {
+				if rc, ok := acceptIncoming("during the SDP lookup"); ok {
+					return handshake(ctx, rc, opt, st, guess)
+				}
+				t = time.Now()
+				sdpCh, serr := sdpRFCOMMChannel(cand.Address, opt.logf)
+				if serr == nil {
+					channel = sdpCh
+					st.Setf("RFCOMM channel", true, "channel %d", sdpCh)
+					opt.logf("sdp: Android Auto RFCOMM channel %d (attempt %d took %s)", sdpCh, attempt, sinceText(t))
+					st.Step("RFCOMM channel %d found over SDP", sdpCh)
+					break
+				}
+				st.Set("RFCOMM channel", false, serr.Error())
+				opt.logf("sdp: attempt %d failed after %s: %v", attempt, sinceText(t), serr)
+				time.Sleep(2 * time.Second)
+			}
+			if channel == 0 {
+				return nil, perr
+			}
 		}
 	} else {
 		st.Setf("RFCOMM channel", true, "forced channel %d", channel)
@@ -529,8 +537,16 @@ waitLoop:
 		want = opt.SSID
 		wantSrc = "flag"
 	}
-	opt.logf("wifi: target ssid=%q (from %s), endpoint=%q, waiting up to %s", want, wantSrc, endpoint, opt.WiFiTimeout)
-	if err := waitWifi(ctx, opt.Interface, want, opt.WiFiTimeout, opt.logf, st); err != nil {
+	// Same /24 as the endpoint: the head unit hands out 192.168.43.x, and only
+	// an address from it can route to 192.168.43.1:6730.
+	wantPrefix := ""
+	if host, _, herr := net.SplitHostPort(endpoint); herr == nil {
+		if i := strings.LastIndex(host, "."); i > 0 {
+			wantPrefix = host[:i+1]
+		}
+	}
+	opt.logf("wifi: target ssid=%q (from %s), endpoint=%q ip_prefix=%q, waiting up to %s", want, wantSrc, endpoint, wantPrefix, opt.WiFiTimeout)
+	if err := waitWifi(ctx, opt.Interface, want, key, wantPrefix, opt.WiFiTimeout, opt.logf, st); err != nil {
 		st.Set("Car Wi-Fi", false, err.Error())
 		return nil, err
 	}
