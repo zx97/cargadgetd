@@ -429,7 +429,10 @@ func nextStep(lang string, s Snapshot) (string, string) {
 	// The head unit only learns that this phone does Android Auto from a wired
 	// session (it ignores the AA Bluetooth pairing channel), so the first run
 	// necessarily goes through the cable, once.
-	if s.USB.Transport == "usb" && !s.USB.AASeen && s.Phase != "session" {
+	// Only while a cable is actually in: on the wireless path the launcher unit
+	// is irrelevant, and the message used to nag at home with no cable at all.
+	if s.USB.Transport == "usb" && !s.USB.AASeen && s.Phase != "session" &&
+		(s.USB.HostPresent || s.USB.SessionRunning || s.USB.Mode == "accessory") {
 		return T(lang, "First run: plug the USB cable, let Android Auto show up for ~20 s, then unplug. Wireless is enough afterwards."), "action"
 	}
 	switch {

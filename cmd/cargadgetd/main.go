@@ -55,6 +55,7 @@ func main() {
 	wirelessIface := flag.String("wireless-iface", "wlan0", "Wi-Fi interface")
 	wirelessWeb := flag.Int("wireless-web", 9288, "wireless status page port (127.0.0.1)")
 	wirelessPassive := flag.Bool("wireless-passive", false, "wait for the head unit to connect to our AA profile; never page or probe")
+	logFile := flag.String("log-file", "", "log to this file, reopening it if it is deleted or rotated")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	certInfo := flag.Bool("cert-info", false, "print reversegearhead_probe and exit")
 	flag.Parse()
@@ -62,6 +63,15 @@ func main() {
 	// Millisecond timestamps: the wireless log is read to compare phase
 	// durations, and whole seconds hide the interesting gaps.
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+
+	// Own the log file when asked: a shell redirect would keep writing into a
+	// deleted inode, so a removed log would silently swallow the session.
+	if *logFile != "" {
+		lw := &reopenWriter{path: *logFile}
+		log.SetOutput(lw)
+		defer lw.Close()
+		log.Printf("log file: %s", *logFile)
+	}
 
 	if *showVersion {
 		log.Printf("cargadgetd %s (%s)", version, commit)

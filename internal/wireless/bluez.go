@@ -37,9 +37,21 @@ type Device struct {
 }
 
 // FindDevice returns the paired device matching address (exact) or name
-// (case-insensitive substring). With both empty it returns the first paired
-// device.
+// (case-insensitive substring). With both empty it returns the best candidate
+// from FindDevices.
 func FindDevice(name, address string) (*Device, error) {
+	devs, err := FindDevices(name, address)
+	if err != nil {
+		return nil, err
+	}
+	return devs[0], nil
+}
+
+// FindDevices returns the paired devices to try, best first. With a selector it
+// returns only the match. Without one every paired device is a candidate, the
+// one advertising the Android Auto UUID first: a head unit that is switched off
+// must not stop the daemon from finding another one that is on.
+func FindDevices(name, address string) ([]*Device, error) {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return nil, fmt.Errorf("system bus: %w", err)
@@ -78,6 +90,7 @@ func FindDevice(name, address string) (*Device, error) {
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i].Address < all[j].Address })
 
+	var picked []*Device
 	for _, d := range all {
 		if !d.Paired {
 			continue
@@ -85,34 +98,31 @@ func FindDevice(name, address string) (*Device, error) {
 		switch {
 		case address != "":
 			if strings.EqualFold(d.Address, address) {
-				return d, nil
+				picked = append(picked, d)
 			}
 		case name != "":
 			if strings.Contains(strings.ToUpper(d.Name), strings.ToUpper(name)) {
-				return d, nil
+				picked = append(picked, d)
 			}
+		default:
+			picked = append(picked, d)
 		}
 	}
-	// No selector: take the paired device that advertises the AA UUID, so the
-	// daemon does not depend on a hard-coded head unit name.
-	if address == "" && name == "" {
+	if len(picked) == 0 {
+		var seen []string
 		for _, d := range all {
-			if d.Paired && hasUUID(d.UUIDs, aaUUIDText) {
-				return d, nil
-			}
+			seen = append(seen, fmt.Sprintf("%s (%s paired=%v)", d.Name, d.Address, d.Paired))
 		}
-		for _, d := range all {
-			if d.Paired {
-				return d, nil
-			}
-		}
+		return nil, fmt.Errorf("no paired Bluetooth device matches name=%q address=%q; seen: %s",
+			name, address, strings.Join(seen, ", "))
 	}
-	var seen []string
-	for _, d := range all {
-		seen = append(seen, fmt.Sprintf("%s (%s paired=%v)", d.Name, d.Address, d.Paired))
-	}
-	return nil, fmt.Errorf("no paired Bluetooth device matches name=%q address=%q; seen: %s",
-		name, address, strings.Join(seen, ", "))
+	// AA-UUID devices first: that is the only real hint of a head unit that
+	// speaks Android Auto. The rest stay in the list so a unit that does not
+	// advertise the UUID (some cheap ones do not) is still tried.
+	sort.SliceStable(picked, func(i, j int) bool {
+		return hasUUID(picked[i].UUIDs, aaUUIDText) && !hasUUID(picked[j].UUIDs, aaUUIDText)
+	})
+	return picked, nil
 }
 
 func variantString(v dbus.Variant) string {

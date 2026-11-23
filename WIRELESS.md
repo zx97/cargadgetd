@@ -244,6 +244,7 @@ flowchart LR
     A["attempt: start"] --> B["dial: begin"]
     B --> C["bluetooth: device found in …"]
     C --> D["bluetooth: adapter configured / by the root helper"]
+    D --> D2["bluetooth: N paired candidate(s)"]
     D --> E["profile: waiting up to 30s"]
     E -->|car connects| F["profile: NewConnection / rfcomm: incoming"]
     E -->|timeout| G["bluetooth: Device1.Connect / link up?"]
@@ -271,6 +272,24 @@ A head unit that never answers `wpp tx: id=2` is the signature of a wrong
 RFCOMM channel (connected to another service) or of a car that wants the phone
 to wait: the SDP channel lookup above it tells which case applies.
 
+
+### Discovery, not a fixed target
+
+Every bonded device is a candidate, tried in turn, so a head unit that is
+switched off does not stop the daemon from finding one that is on. A device is
+only reported as present once its ACL link comes up; "candidate" in the log
+means "read from the BlueZ cache", not "in range".
+
+`~/.cache/cargadgetd-headunit` (one line: Bluetooth address, or a name) pins a
+single head unit when several are around and the order is not what you want.
+Empty means discovery over all bonded devices.
+
+### A deleted log is recreated
+
+The daemon is started with `-log-file` and owns its log: if the file is removed
+or rotated while a session runs, it reopens it. A shell redirect would keep
+writing into the unlinked inode, which is how a whole session can leave no trace
+(a deleted `wireless.log` looked like "nothing happened").
 
 ## When the car ends the session
 

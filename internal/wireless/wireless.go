@@ -2,6 +2,7 @@ package wireless
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -77,7 +78,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	st.Phase("bluetooth")
 
 	t := time.Now()
-	dev, err := FindDevice(opt.Name, opt.Address)
+	devices, err := FindDevices(opt.Name, opt.Address)
 	if err != nil {
 		opt.logf("bluetooth: device lookup failed in %s: %v", sinceText(t), err)
 		// The most common cause by far: the phone is not paired with the car any
@@ -92,11 +93,13 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		st.Set("Bluetooth paired", false, human.Error())
 		return nil, human
 	}
-	opt.logf("bluetooth: device found in %s", sinceText(t))
-	st.Step("Car found: %s (%s)", dev.Name, dev.Address)
+	dev := devices[0]
+	opt.logf("bluetooth: %d paired candidate(s) in %s", len(devices), sinceText(t))
 	st.Setf("Bluetooth paired", true, "%s %s", dev.Name, dev.Address)
-	opt.logf("bluetooth: %s addr=%s paired=%v bonded=%v trusted=%v connected=%v services_resolved=%v adapter=%s uuids=%v",
-		dev.Name, dev.Address, dev.Paired, dev.Bonded, dev.Trusted, dev.Connected, dev.ServicesResolved, dev.Adapter, dev.UUIDs)
+	for i, c := range devices {
+		opt.logf("bluetooth: candidate %d/%d %s addr=%s trusted=%v connected=%v adapter=%s uuids=%v",
+			i+1, len(devices), c.Name, c.Address, c.Trusted, c.Connected, c.Adapter, c.UUIDs)
+	}
 	t = time.Now()
 	dev.EnsureAdapter(opt.logf)
 	opt.logf("bluetooth: adapter setup took %s", sinceText(t))
@@ -195,21 +198,63 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	if rc, ok := acceptIncoming("before the Bluetooth link"); ok {
 		return handshake(ctx, rc, opt, st, guess)
 	}
-	t = time.Now()
-	if err := dev.Connect(); err != nil {
-		human := humanBluetoothError(err)
-		opt.logf("bluetooth: Device1.Connect failed after %s: %v", sinceText(t), err)
-		st.Set("Bluetooth link", false, human.Error())
+
+	// Try every candidate in turn: a head unit that is switched off must not
+	// stop the daemon from finding one that is on. A pinned name or address
+	// leaves a single candidate, so the behaviour is unchanged there.
+	var lastErr error
+	for i, cand := range devices {
+		if i > 0 {
+			opt.logf("bluetooth: next candidate %d/%d: %s (%s)", i+1, len(devices), cand.Name, cand.Address)
+		}
+		// No per-candidate line on the page: the driver only needs to know
+		// which head unit answered. The candidates stay in the log.
+		conn, err := dialCandidate(ctx, cand, opt, st, guess, acceptIncoming)
+		if err == nil {
+			st.Step("%s answered (%s)", cand.Name, cand.Address)
+			return conn, nil
+		}
+		lastErr = err
+		if ctx.Err() != nil {
+			return nil, err
+		}
+		opt.logf("bluetooth: %s did not answer or refused: %v", cand.Name, err)
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("%w: no paired head unit answered (%d tried)", errCarAbsent, len(devices))
+	} else if errors.Is(lastErr, errCarAbsent) {
+		lastErr = fmt.Errorf("%w (%d paired devices tried)", lastErr, len(devices))
+	}
+	return nil, lastErr
+}
+
+// dialCandidate runs the client half of the bootstrap against one head unit:
+// bring the ACL link up, find the AA RFCOMM channel, and hand the connection to
+// the WPP handshake. It returns the first error, so Dial can move to the next
+// candidate.
+func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, guess string,
+	acceptIncoming func(string) (net.Conn, bool)) (net.Conn, error) {
+	t := time.Now()
+	linkErr := cand.Connect()
+	if linkErr != nil {
+		opt.logf("bluetooth: Device1.Connect failed after %s: %v", sinceText(t), linkErr)
 	} else {
 		opt.logf("bluetooth: Device1.Connect returned OK in %s", sinceText(t))
-		st.Set("Bluetooth link", true, "connected")
 	}
-	if dev.WaitConnected(10*time.Second, opt.logf) {
+	if cand.WaitConnected(10*time.Second, opt.logf) {
 		opt.logf("bluetooth: link up")
 		st.Set("Bluetooth link", true, "link up")
 	} else {
-		opt.logf("bluetooth: link still down after 10s")
-		st.Set("Bluetooth link", false, "link down")
+		// Nothing else can work without the ACL link, and the next candidate
+		// deserves the time: a head unit that is switched off must not cost a
+		// full SDP and probe cycle.
+		opt.logf("bluetooth: link still down after 10s, skipping %s", cand.Name)
+		human := humanBluetoothError(linkErr)
+		if human == nil {
+			human = fmt.Errorf("%s: Bluetooth link never came up", cand.Name)
+		}
+		st.Set("Bluetooth link", false, human.Error())
+		return nil, human
 	}
 
 	channel := opt.Channel
@@ -220,7 +265,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 				return handshake(ctx, rc, opt, st, guess)
 			}
 			t = time.Now()
-			ch, err := sdpRFCOMMChannel(dev.Address, opt.logf)
+			ch, err := sdpRFCOMMChannel(cand.Address, opt.logf)
 			if err == nil {
 				channel = ch
 				st.Setf("RFCOMM channel", true, "channel %d", ch)
@@ -236,7 +281,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 			// SDP was refused (usually the baseband link is not fully up yet).
 			// Do not guess: ask the head unit itself which channel speaks WPP.
 			st.Set("RFCOMM channel", false, "SDP unavailable, probing channels")
-			ch, perr := probeAAChannel(ctx, dev.Address, opt.logf)
+			ch, perr := probeAAChannel(ctx, cand.Address, opt.logf)
 			if perr != nil {
 				st.Set("RFCOMM channel", false, perr.Error())
 				return nil, perr
@@ -253,10 +298,10 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		return handshake(ctx, rc, opt, st, guess)
 	}
 	t = time.Now()
-	rc, err := dialRFCOMM(dev.Address, channel, opt.logf)
+	rc, err := dialRFCOMM(cand.Address, channel, opt.logf)
 	if err != nil {
 		human := humanBluetoothError(err)
-		opt.logf("rfcomm: connect %s channel %d failed after %s: %v", dev.Address, channel, sinceText(t), err)
+		opt.logf("rfcomm: connect %s channel %d failed after %s: %v", cand.Address, channel, sinceText(t), err)
 		st.Error(human)
 		st.Set("RFCOMM", false, human.Error())
 		return nil, human
@@ -264,12 +309,16 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	st.Setf("RFCOMM", true, "channel %d", channel)
 	st.Phase("wpp")
 	if fc, ok := rc.(*fileConn); ok {
-		opt.logf("rfcomm: connected to %s channel %d in %s (fd=%d)", dev.Address, channel, sinceText(t), fc.Fd())
+		opt.logf("rfcomm: connected to %s channel %d in %s (fd=%d)", cand.Address, channel, sinceText(t), fc.Fd())
 	} else {
-		opt.logf("rfcomm: connected to %s channel %d in %s", dev.Address, channel, sinceText(t))
+		opt.logf("rfcomm: connected to %s channel %d in %s", cand.Address, channel, sinceText(t))
 	}
 	return handshake(ctx, rc, opt, st, guess)
 }
+
+// errCarAbsent marks "nothing answered", the normal case at home: the page
+// shows "waiting for the car" instead of an error.
+var errCarAbsent = errors.New("car absent")
 
 // humanBluetoothError turns raw BlueZ/L2CAP failures into one sentence the
 // driver can act on. The raw error stays in the log.
@@ -283,7 +332,7 @@ func humanBluetoothError(err error) error {
 		strings.Contains(s, "page-timeout"),
 		strings.Contains(s, "page timeout"),
 		strings.Contains(s, "connection timed out"):
-		return fmt.Errorf("car absent: Bluetooth unreachable (ignition on?)")
+		return fmt.Errorf("%w: Bluetooth unreachable (ignition on?)", errCarAbsent)
 	case strings.Contains(s, "device or resource busy"):
 		return fmt.Errorf("RFCOMM channel busy with a previous session: retrying next cycle")
 	case strings.Contains(s, "connection refused"):
