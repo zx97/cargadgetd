@@ -14,10 +14,23 @@ import (
 // record on channel 7 and its generic SPP service on 8 — dialling 8 reaches a
 // service that never speaks WPP, which looked like "the car ignores us".
 // The rest are common AA channels on other head units.
-// Kept short on purpose: Sailfish feeds BlueZ through hci_vhci and an
-// AppSupport bridge, and a burst of connect attempts was enough to stall the
-// controller ("link tx timeout", then the radio stopped answering altogether).
 var candidateAAChannels = []uint8{7, 8, 9}
+
+// fullScan is the rest of the RFCOMM range, probed only when the common
+// channels are refused. A universal head unit with a working phone picked its
+// own channel; without SDP (which some units refuse on this stack) the only way
+// to find it is to ask every channel. Refusals come back in tens of
+// milliseconds, so the whole range costs seconds.
+func fullScan() []uint8 {
+	var out []uint8
+	for ch := 1; ch <= 30; ch++ {
+		if ch == 7 || ch == 8 || ch == 9 {
+			continue
+		}
+		out = append(out, uint8(ch))
+	}
+	return out
+}
 
 // probeAAChannel finds the head unit's Android Auto RFCOMM channel by talking
 // to it: connect, send a WifiInfoRequest, and keep the channel that answers.
@@ -25,9 +38,16 @@ var candidateAAChannels = []uint8{7, 8, 9}
 // often refuses while its baseband link is not fully up.
 func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any)) (uint8, error) {
 	down := 0
-	for _, ch := range candidateAAChannels {
+	channels := append(append([]uint8{}, candidateAAChannels...), fullScan()...)
+	for i, ch := range channels {
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
+		}
+		// The extended range is a last resort: do not spend a second between
+		// attempts there, refusals are immediate.
+		pause := time.Second
+		if i >= len(candidateAAChannels) {
+			pause = 200 * time.Millisecond
 		}
 		t := time.Now()
 		rc, err := dialRFCOMM(addr, ch, logf)
@@ -56,7 +76,7 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 			}
 		}
 		rc.Close()
-		time.Sleep(time.Second)
+		time.Sleep(pause)
 		if werr != nil {
 			logf("probe: channel %d: write failed after %s: %v", ch, sinceText(t), werr)
 			continue
@@ -67,5 +87,5 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 		}
 		logf("probe: channel %d opened but did not answer WPP (another service)", ch)
 	}
-	return 0, fmt.Errorf("probe: no channel among %v answered WPP", candidateAAChannels)
+	return 0, fmt.Errorf("probe: no RFCOMM channel answered WPP (tried %v and 1-30)", candidateAAChannels)
 }

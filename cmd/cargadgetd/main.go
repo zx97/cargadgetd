@@ -616,6 +616,7 @@ func runSession(md *session.MD, autoAV, usbPace bool) {
 		streaming := true
 		nextFrame := time.Now()
 		var bypassN, skipN uint64
+		var lastIDR time.Time
 		var pcmCoolUntil atomic.Int64 // unix nano; 0 = not cooling
 		var pcmCoolN atomic.Uint64
 		onAudioAckStall := func(reason string) {
@@ -705,7 +706,13 @@ func runSession(md *session.MD, autoAV, usbPace bool) {
 						// Do not retransmit the unacked AU.
 						if md.GiveUpVideoAck(session.VideoAckGiveUp) {
 							live.NotePipeSlow()
-							live.ForceIDR()
+							// A keyframe costs an encoder reopen, which is what
+							// killed Codec2 when it happened per dropped frame.
+							// One per two seconds is enough to resynchronise.
+							if time.Since(lastIDR) > 2*time.Second {
+								lastIDR = time.Now()
+								live.ForceIDR()
+							}
 						}
 						bypassN++
 						if bypassN <= 5 || bypassN%50 == 0 {

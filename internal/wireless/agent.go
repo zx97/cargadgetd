@@ -111,15 +111,17 @@ const (
 	PairTimeout = 40 * time.Second
 )
 
-// PairDevice pairs with a head unit, answering the PIN it displays. A bond
-// that the head unit no longer accepts is dropped and redone once: that stale
-// state is what makes every later page time out.
-func PairDevice(address, pin string, logf func(string, ...any)) error {
+// PairDevice pairs with a head unit, answering the PIN it displays. The
+// selector is a Bluetooth address or a device name (a head unit with a random
+// address changes it at every boot). A bond the head unit no longer accepts is
+// dropped and redone once: that stale state is what makes every later page time
+// out.
+func PairDevice(selector, pin string, logf func(string, ...any)) error {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	if address == "" {
-		return fmt.Errorf("pairing needs a Bluetooth address")
+	if selector == "" {
+		return fmt.Errorf("pairing needs a Bluetooth address or name")
 	}
 	if pin == "" {
 		pin = "0000"
@@ -145,30 +147,42 @@ func PairDevice(address, pin string, logf func(string, ...any)) error {
 		logf("agent: default agent not taken over: %v", err)
 	}
 
-	// BlueZ only pairs with an object it has seen, so make sure the device is
-	// discovered before touching it (a bonded device can be in the cache, an
-	// unknown one cannot).
-	if _, err := devicePath(conn, address); err != nil {
-		if err := discover(conn, address, 25*time.Second, logf); err != nil {
-			return err
+	// BlueZ only pairs with an object it has seen. A device that is bonded (or
+	// whose address is known) can be created directly — Adapter1.CreateDevice
+	// works without an inquiry, which matters for head units that are
+	// connectable but not discoverable.
+	if _, err := devicePath(conn, selector); err != nil {
+		created := false
+		if isAddress(selector) {
+			if aerr := createDevice(conn, selector, logf); aerr == nil {
+				created = true
+			}
+		}
+		if !created {
+			if derr := discover(conn, selector, 25*time.Second, logf); derr != nil {
+				return derr
+			}
 		}
 	}
+	if path, err := devicePath(conn, selector); err == nil {
+		logf("pairing: target %s is %s", selector, path)
+	}
 
-	logf("pairing: %s with PIN %s", address, pin)
-	paired, err := pairOnce(conn, address, logf)
+	logf("pairing: %s with PIN %s", selector, pin)
+	paired, err := pairOnce(conn, selector, logf)
 	if err != nil || !paired {
 		if err != nil {
 			logf("pairing: first attempt: %v", err)
 		}
 		// The bond may be the half-done one the head unit refuses. Start over.
-		if path, perr := devicePath(conn, address); perr == nil {
+		if path, perr := devicePath(conn, selector); perr == nil {
 			adapter := parentPath(path)
 			if rerr := conn.Object(bluezService, adapter).Call("org.bluez.Adapter1.RemoveDevice", 0, path).Err; rerr == nil {
 				logf("pairing: stale bond removed, pairing again")
-				if derr := discover(conn, address, 25*time.Second, logf); derr != nil {
+				if derr := discover(conn, selector, 25*time.Second, logf); derr != nil {
 					return derr
 				}
-				paired, err = pairOnce(conn, address, logf)
+				paired, err = pairOnce(conn, selector, logf)
 			}
 		}
 	}
@@ -179,7 +193,7 @@ func PairDevice(address, pin string, logf func(string, ...any)) error {
 		return fmt.Errorf("pair: device is not bonded after the attempt")
 	}
 
-	path, _ := devicePath(conn, address)
+	path, _ := devicePath(conn, selector)
 	if path != "" && !trusted(conn, path) {
 		if e := conn.Object(bluezService, path).SetProperty("org.bluez.Device1.Trusted", dbus.MakeVariant(true)); e != nil {
 			logf("pairing: could not mark trusted: %v", e)
@@ -192,8 +206,8 @@ func PairDevice(address, pin string, logf func(string, ...any)) error {
 }
 
 // pairOnce calls Device1.Pair and reports the resulting bond state.
-func pairOnce(conn *dbus.Conn, address string, logf func(string, ...any)) (bool, error) {
-	path, err := devicePath(conn, address)
+func pairOnce(conn *dbus.Conn, selector string, logf func(string, ...any)) (bool, error) {
+	path, err := devicePath(conn, selector)
 	if err != nil {
 		return false, err
 	}
@@ -217,7 +231,7 @@ func pairOnce(conn *dbus.Conn, address string, logf func(string, ...any)) (bool,
 // discover runs a Bluetooth inquiry until address shows up in BlueZ, then stops
 // it. Without this the object of a device that is not in the cache cannot be
 // paired at all.
-func discover(conn *dbus.Conn, address string, wait time.Duration, logf func(string, ...any)) error {
+func discover(conn *dbus.Conn, selector string, wait time.Duration, logf func(string, ...any)) error {
 	adapter, err := adapterPath(conn)
 	if err != nil {
 		return err
@@ -225,18 +239,36 @@ func discover(conn *dbus.Conn, address string, wait time.Duration, logf func(str
 	if err := conn.Object(bluezService, adapter).Call("org.bluez.Adapter1.StartDiscovery", 0).Err; err != nil {
 		logf("pairing: discovery not started: %v", err)
 	} else {
-		logf("pairing: looking for %s", address)
+		logf("pairing: looking for %s", selector)
 		defer conn.Object(bluezService, adapter).Call("org.bluez.Adapter1.StopDiscovery", 0)
 	}
 	deadline := time.Now().Add(wait)
 	for time.Now().Before(deadline) {
-		if _, err := devicePath(conn, address); err == nil {
-			logf("pairing: %s in range", address)
+		if _, err := devicePath(conn, selector); err == nil {
+			logf("pairing: %s in range", selector)
 			return nil
 		}
 		time.Sleep(time.Second)
 	}
-	return fmt.Errorf("%s did not show up within %s (head unit Bluetooth off?)", address, wait)
+	return fmt.Errorf("%s did not show up within %s (head unit Bluetooth off or not discoverable?)", selector, wait)
+}
+
+// createDevice asks BlueZ for a device object by address, without an inquiry.
+// BlueZ warns it is deprecated for unknown devices but it still creates the
+// object, which is enough to page and pair a head unit that hides its
+// discoverable flag.
+func createDevice(conn *dbus.Conn, address string, logf func(string, ...any)) error {
+	adapter, err := adapterPath(conn)
+	if err != nil {
+		return err
+	}
+	var path dbus.ObjectPath
+	if err := conn.Object(bluezService, adapter).Call("org.bluez.Adapter1.CreateDevice", 0, address).Store(&path); err != nil {
+		logf("pairing: create %s: %v", address, err)
+		return err
+	}
+	logf("pairing: device object created for %s (%s)", address, path)
+	return nil
 }
 
 // adapterPath returns the first BlueZ adapter path.
@@ -278,23 +310,44 @@ func UnpairDevice(address string, logf func(string, ...any)) error {
 	return nil
 }
 
-// devicePath finds the BlueZ object path of a device by address.
-func devicePath(conn *dbus.Conn, address string) (dbus.ObjectPath, error) {
+// devicePath finds the BlueZ object path of a device by address, or by name
+// when the selector is not a MAC. Head units with a random address change it
+// at every boot, so the name is often the only stable handle.
+func devicePath(conn *dbus.Conn, selector string) (dbus.ObjectPath, error) {
 	var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
 	err := conn.Object(bluezService, "/").Call("org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).Store(&managed)
 	if err != nil {
 		return "", fmt.Errorf("bluez managed objects: %w", err)
 	}
+	wantAddr := isAddress(selector)
 	for path, ifaces := range managed {
 		props, ok := ifaces[bluezDeviceIface]
 		if !ok {
 			continue
 		}
-		if strings.EqualFold(variantString(props["Address"]), address) {
+		if wantAddr {
+			if strings.EqualFold(variantString(props["Address"]), selector) {
+				return path, nil
+			}
+			continue
+		}
+		name := variantString(props["Name"])
+		if name == "" {
+			name = variantString(props["Alias"])
+		}
+		if strings.Contains(strings.ToUpper(name), strings.ToUpper(selector)) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("no BlueZ device with address %s", address)
+	if wantAddr {
+		return "", fmt.Errorf("no BlueZ device with address %s", selector)
+	}
+	return "", fmt.Errorf("no BlueZ device whose name contains %q", selector)
+}
+
+// isAddress reports whether s looks like a Bluetooth address (aa:bb:cc:dd:ee:ff).
+func isAddress(s string) bool {
+	return strings.Count(s, ":") == 5 && len(s) == 17
 }
 
 // parentPath returns the adapter path of a device path

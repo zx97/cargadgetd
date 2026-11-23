@@ -1823,7 +1823,7 @@ func (m *MD) ReserveVideoCredit(wait time.Duration) error {
 	if !m.videoStreaming.Load() {
 		return ErrNoVideoCredit
 	}
-	if m.videoInFlight.Load() < 1 {
+	if m.videoInFlight.Load() < maxVideoInFlight {
 		m.videoInFlight.Add(1)
 		return nil
 	}
@@ -1832,7 +1832,7 @@ func (m *MD) ReserveVideoCredit(wait time.Duration) error {
 		case <-m.videoCredit:
 		default:
 		}
-		if m.videoInFlight.Load() >= 1 {
+		if m.videoInFlight.Load() >= maxVideoInFlight {
 			return ErrNoVideoCredit
 		}
 		m.videoInFlight.Add(1)
@@ -1931,9 +1931,15 @@ func (m *MD) ReleaseVideoCredit() {
 }
 
 // VideoAckGiveUp is how long an AU may stay unacked before the sender drops
-// that credit. MediaAck RTT on USB is ~80ms, so this is a few frames past a
-// slow ack, not a multi-second freeze. The dropped AU is not retransmitted.
-const VideoAckGiveUp = 200 * time.Millisecond
+// that credit. A DHU acks every AU (~80ms RTT); a cheap universal head unit
+// acks roughly one frame in six, so a 200ms window starved the pipeline and
+// forced a keyframe per dropped frame. The dropped AU is not retransmitted.
+const VideoAckGiveUp = 1500 * time.Millisecond
+
+// maxVideoInFlight is how many AUs may wait for a MediaAck. It was 1, which
+// assumed one ack per frame. Head units that batch their acks then send one
+// frame per ack (~5fps) and spend their time in the give-up path.
+const maxVideoInFlight = 4
 
 // VideoUnackedAge is how long the current USB video AU has been waiting for
 // MediaAck. Zero when nothing is in flight.

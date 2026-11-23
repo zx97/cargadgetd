@@ -44,7 +44,7 @@ func main() {
 	aoaService := flag.String("aoa-service", "", "start, stop, or restart cargadgetd-aoa.service (setuid)")
 	wifiConnect := flag.String("wifi-connect", "", "connect a saved Wi-Fi service (setuid root) and exit")
 	btAdapter := flag.String("bt-adapter", "", "power and expose a BlueZ adapter, e.g. /org/bluez/hci1 (setuid root) and exit")
-	btPair := flag.String("bt-pair", "", "pair a head unit by Bluetooth address, answering its PIN (setuid root) and exit")
+	btPair := flag.String("bt-pair", "", "pair a head unit by Bluetooth address or name, answering its PIN (setuid root) and exit")
 	btUnpair := flag.String("bt-unpair", "", "forget a Bluetooth bond (setuid root) and exit")
 	btPin := flag.String("bt-pin", "0000", "PIN to send when the head unit asks for one")
 	flag.Parse()

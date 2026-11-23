@@ -15,9 +15,14 @@ import (
 // daemon give up on attempts the head unit had actually accepted. A fresh
 // socket is used for the retry: the interrupted attempt may still be pending in
 // the kernel, and reusing the fd would return EALREADY.
+// maxEINTR covers Go's own SIGURG preemption, which interrupts a blocking
+// Bluetooth connect several times per second on a busy process. It is not a
+// failure and must never cost a channel probe.
+const maxEINTR = 20
+
 func dialBluetooth(typ, proto int, sa unix.Sockaddr, attempts int, logf func(string, ...any)) (int, error) {
-	if attempts < 1 {
-		attempts = 1
+	if attempts < maxEINTR {
+		attempts = maxEINTR
 	}
 	var last error
 	for i := 1; i <= attempts; i++ {

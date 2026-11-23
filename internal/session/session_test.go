@@ -195,18 +195,29 @@ func TestUSBVideoNAckHoldThenRecover(t *testing.T) {
 	nal := make([]byte, 64)
 	nal[0], nal[1], nal[2], nal[3], nal[4] = 0, 0, 0, 1, 0x67
 	hu.SkipVideoAck.Store(true)
-	if err := md.SendH264(33333, nal); err != nil {
-		t.Fatalf("first AU: %v", err)
+	// A head unit may batch its acks, so a few AUs may wait at once; past that
+	// the sender must stop instead of flooding the pipe.
+	for i := 0; i < 8; i++ {
+		err := md.SendH264(33333, nal)
+		if errors.Is(err, session.ErrNoVideoCredit) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("AU %d: %v", i, err)
+		}
 	}
-	if md.VideoInFlight() != 1 {
-		t.Fatalf("in_flight=%d want 1 after unacked AU", md.VideoInFlight())
+	if n := md.VideoInFlight(); n < 2 {
+		t.Fatalf("in_flight=%d, want several AUs allowed to wait", n)
 	}
 	if err := md.ReserveVideoCredit(0); !errors.Is(err, session.ErrNoVideoCredit) {
-		t.Fatalf("want ErrNoVideoCredit while ACK held, got %v", err)
+		t.Fatalf("want ErrNoVideoCredit while ACKs are held, got %v", err)
 	}
 
-	if err := hu.SendMediaAck(md.VideoCh); err != nil {
-		t.Fatalf("late MediaAck: %v", err)
+	// One ack releases one AU; the head unit acks every frame it accepted.
+	for i, n := 0, md.VideoInFlight(); i < n; i++ {
+		if err := hu.SendMediaAck(md.VideoCh); err != nil {
+			t.Fatalf("late MediaAck %d: %v", i, err)
+		}
 	}
 	deadline := time.Now().Add(2 * time.Second)
 	for md.VideoInFlight() > 0 {
@@ -273,7 +284,7 @@ func TestGiveUpVideoAckAfterSilence(t *testing.T) {
 		t.Fatalf("ack still held after %s", time.Since(sent).Round(time.Millisecond))
 	}
 	gaveUp := time.Since(sent)
-	if gaveUp > time.Second {
+	if gaveUp > session.VideoAckGiveUp+300*time.Millisecond {
 		t.Fatalf("give-up took %s, want about %s", gaveUp.Round(time.Millisecond), session.VideoAckGiveUp)
 	}
 	if md.VideoInFlight() != 0 {
