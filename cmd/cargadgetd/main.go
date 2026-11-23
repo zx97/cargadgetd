@@ -658,6 +658,18 @@ func runSession(md *session.MD, autoAV, usbPace bool) {
 			case err := <-errCh:
 				log.Printf("session: %v", err)
 				return
+			case <-md.Done():
+				// The session is over but Run() may still be blocked in a
+				// transport read. Stop pushing frames into a dead endpoint:
+				// that wrote "send queue full" for minutes and kept the
+				// service from restarting the session.
+				select {
+				case err := <-errCh:
+					log.Printf("session: %v", err)
+				default:
+					log.Printf("session: ended (watchdog or peer), stopping the video loop")
+				}
+				return
 			default:
 			}
 			if usbPace && !md.VideoStreaming() {
