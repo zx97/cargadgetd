@@ -136,7 +136,8 @@ func JoinWithAgent(ssid, psk string, logf func(string, ...any)) error {
 // waitConnmanService scans until ConnMan lists a wifi service named ssid.
 func waitConnmanService(conn *dbus.Conn, ssid string, wait time.Duration, logf func(string, ...any)) (dbus.ObjectPath, error) {
 	deadline := time.Now().Add(wait)
-	scanAt := time.Now()
+	scanAt := time.Time{} // first loop scans immediately
+
 	for {
 		services, err := connmanWiFiServices()
 		if err == nil {
@@ -152,11 +153,11 @@ func waitConnmanService(conn *dbus.Conn, ssid string, wait time.Duration, logf f
 		if time.Now().After(deadline) {
 			return "", fmt.Errorf("connman: %q never appeared in a scan", ssid)
 		}
-		if time.Since(scanAt) > 2*time.Second {
+		if scanAt.IsZero() || time.Since(scanAt) > 2*time.Second {
 			connmanScan()
 			scanAt = time.Now()
 		}
-		time.Sleep(300 * time.Millisecond)
+		time.Sleep(250 * time.Millisecond)
 	}
 }
 

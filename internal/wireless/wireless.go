@@ -7,6 +7,8 @@ import (
 	"net"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -64,6 +66,9 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		opt.WiFiTimeout, opt.HandshakeTimeout)
 	defer func() {
 		if err != nil {
+			// The AP was joined but AA never came up: leave it rather than
+			// stranding the phone on a network with no route.
+			RestoreHomeWiFi(opt.logf)
 			opt.logf("dial: FAILED after %s: %v", sinceText(start), err)
 			return
 		}
@@ -100,6 +105,25 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		opt.logf("bluetooth: candidate %d/%d %s addr=%s trusted=%v connected=%v adapter=%s uuids=%v",
 			i+1, len(devices), c.Name, c.Address, c.Trusted, c.Connected, c.Adapter, c.UUIDs)
 	}
+	// A carplay_* network the phone rejoined on its own is a leftover: the head
+	// unit is not in a session with us, and that AP has no route.
+	LeaveHeadUnitAP(opt.logf)
+
+	// Self-heal a half-configured Wi-Fi: an interface that is associated but
+	// never got a lease (what a cancelled join leaves behind) makes every later
+	// attempt pointless. Ask ConnMan to (re)connect the network it is on.
+	if ssid := wifiSSID(opt.Interface); ssid != "" && wifiIPv4(opt.Interface) == "" {
+		opt.logf("wifi: %s is on %q without an address, asking ConnMan to reconnect", opt.Interface, ssid)
+		if err := connmanJoin(ssid, ""); err != nil {
+			opt.logf("wifi: self-heal: %v", err)
+		}
+	}
+
+	// Warm the Wi-Fi scan while the Bluetooth work runs: the head unit's AP is
+	// already on air before the WPP hands out its key, and a ConnMan scan costs
+	// 5-8s. Doing it here turns the later join into a plain Connect.
+	go connmanScan()
+
 	t = time.Now()
 	dev.EnsureAdapter(opt.logf)
 	opt.logf("bluetooth: adapter setup took %s", sinceText(t))
@@ -150,7 +174,7 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		// link coming up; waiting 30s costs the whole wireless window of units
 		// that regenerate their SSID (the lab unit drops out of AA mode after
 		// about a minute).
-		waitFor := 6 * time.Second
+		waitFor := 2 * time.Second
 		if opt.Passive {
 			waitFor = 5 * time.Minute
 		}
@@ -239,20 +263,28 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, guess string,
 	acceptIncoming func(string) (net.Conn, bool)) (net.Conn, error) {
 	t := time.Now()
-	linkErr := cand.Connect()
-	if linkErr != nil {
-		opt.logf("bluetooth: Device1.Connect failed after %s: %v", sinceText(t), linkErr)
+	linkErr := error(nil)
+	if cand.Connected {
+		// Paging this unit takes about 30s, and the link often survives between
+		// attempts: reuse it instead of paying that again.
+		opt.logf("bluetooth: link already up, no page needed")
+		st.Set("Bluetooth link", true, "link up")
 	} else {
-		opt.logf("bluetooth: Device1.Connect returned OK in %s", sinceText(t))
+		linkErr = cand.Connect()
+		if linkErr != nil {
+			opt.logf("bluetooth: Device1.Connect failed after %s: %v", sinceText(t), linkErr)
+		} else {
+			opt.logf("bluetooth: Device1.Connect returned OK in %s", sinceText(t))
+		}
 	}
-	if cand.WaitConnected(10*time.Second, opt.logf) {
+	if cand.WaitConnected(4*time.Second, opt.logf) {
 		opt.logf("bluetooth: link up")
 		st.Set("Bluetooth link", true, "link up")
 	} else {
 		// Nothing else can work without the ACL link, and the next candidate
 		// deserves the time: a head unit that is switched off must not cost a
 		// full SDP and probe cycle.
-		opt.logf("bluetooth: link still down after 10s, skipping %s", cand.Name)
+		opt.logf("bluetooth: link still down after 4s, skipping %s", cand.Name)
 		human := humanBluetoothError(linkErr)
 		if human == nil {
 			human = fmt.Errorf("%s: Bluetooth link never came up", cand.Name)
@@ -352,6 +384,31 @@ func humanBluetoothError(err error) error {
 // handshake runs the WPP exchange on rc, joins the car's AP, and returns the
 // TCP connection where the phone is the TLS server.
 func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess string) (conn net.Conn, err error) {
+	// The Wi-Fi join runs in parallel with the rest of the WPP exchange: the
+	// credentials arrive early (InfoResponse) but the endpoint only later, and
+	// the head unit's wireless window is short. Sequential joins cost the sum
+	// of both, parallel ones the maximum.
+	var joinOnce sync.Once
+	var joinErr atomic.Value // stores the error string, for the log
+	startJoin := func(wantSSID, wantKey string) {
+		if wantSSID == "" {
+			return
+		}
+		joinOnce.Do(func() {
+			go func() {
+				t := time.Now()
+				if err := connmanJoin(wantSSID, wantKey); err != nil {
+					joinErr.Store(err.Error())
+					opt.logf("wifi: parallel join %q failed after %s: %v", wantSSID, sinceText(t), err)
+					return
+				}
+				opt.logf("wifi: parallel join %q done in %s", wantSSID, sinceText(t))
+			}()
+		})
+	}
+
+	t := time.Now()
+
 	start := time.Now()
 	var (
 		rx, tx int
@@ -424,6 +481,7 @@ waitLoop:
 			rx++
 			lastRx = time.Now()
 			idleSince = lastRx
+			retries = 0 // the car is talking: the budget is for silence only
 			st.WPP(describeWPP(pkt))
 			opt.logf("wpp rx: id=%d len=%d in %s hex=%s", pkt.ID, len(pkt.Payload), sinceText(t), hexPreview(pkt.Payload))
 			opt.logf("wpp rx: %s", describeWPP(pkt))
@@ -464,6 +522,7 @@ waitLoop:
 				}
 				opt.logf("wpp setup: endpoint=%q ssid=%q key_len=%d bssid=%q security=%d",
 					endpoint, ssid, len(key), bssid, security)
+				startJoin(ssid, key)
 			case wppInfoResponse:
 				s, k, b, sec := parseInfoResponse(pkt.Payload)
 				if s != "" {
@@ -474,6 +533,7 @@ waitLoop:
 				}
 				opt.logf("wpp info: ssid=%q key_len=%d bssid=%q security=%d",
 					ssid, len(key), bssid, security)
+				startJoin(ssid, key)
 			case wppStartRequest:
 				ip, port := parseStartEndpoint(pkt.Payload)
 				if ip != "" {
@@ -504,13 +564,16 @@ waitLoop:
 				break waitLoop
 			}
 		case <-time.After(wait):
-			if time.Since(idleSince) > 10*time.Second {
+			// The head unit's wireless window is short (its AP and its RFCOMM
+			// service disappear within a minute), so ask again quickly instead of
+			// waiting ten seconds between attempts.
+			if time.Since(idleSince) > 2*time.Second {
 				// Stock Android Auto retries the Wi-Fi info request twice, then
 				// closes the socket and restarts WPP. More retries hide the real
 				// problem: a car that never answers is usually on a different
 				// RFCOMM channel than the one we are talking to.
-				if retries >= 2 {
-					return nil, fmt.Errorf("wpp: no WifiInfoResponse after %d retries (wrong RFCOMM service on this channel?)", retries)
+				if retries >= 6 {
+					return nil, fmt.Errorf("wpp: no useful answer after %d attempts (wrong RFCOMM service on this channel?)", retries)
 				}
 				if err := send(wppInfoRequest, nil, "info request, retry"); err != nil {
 					return nil, err
@@ -555,7 +618,7 @@ waitLoop:
 	}
 
 	st.Phase("tcp")
-	t := time.Now()
+	t = time.Now()
 	conn, err = net.DialTimeout("tcp", endpoint, 10*time.Second)
 	if err != nil {
 		st.Set("Car TCP", false, err.Error())

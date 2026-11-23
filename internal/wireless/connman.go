@@ -210,6 +210,91 @@ func JoinWiFi(ssid, passphrase string) error {
 	}
 }
 
+// homeSSIDFile remembers the network the phone was on before we took it to a
+// head unit's AP, so it can be put back when the session fails or ends.
+const homeSSIDFile = "/run/cargadgetd-wifi-home"
+
+// LeaveHeadUnitAP disconnects a carplay_* network the phone is stuck on. These
+// networks were added with autostart, so wpa_supplicant rejoins them as soon as
+// the head unit's AP reappears — even when nobody asked. ConnMan then falls
+// back to a stored network on its own.
+func LeaveHeadUnitAP(logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	ssid := wifiSSID("wlan0")
+	if !strings.HasPrefix(strings.ToLower(ssid), "carplay_") {
+		return
+	}
+	logf("wifi: leaving the head unit AP %q (not in a session)", ssid)
+	ForgetHeadUnitAPs(logf)
+}
+
+// RememberHomeSSID records the current network before switching away, once per
+// switch (a second call while already on the car AP does nothing).
+func RememberHomeSSID(ssid string) {
+	if strings.TrimSpace(ssid) == "" {
+		return
+	}
+	if _, err := os.Stat(homeSSIDFile); err == nil {
+		return
+	}
+	_ = os.WriteFile(homeSSIDFile, []byte(ssid+"\n"), 0o644)
+}
+
+// RestoreHomeWiFi leaves the head unit's AP and reconnects the network the
+// phone was on. The carplay_* networks are forgotten, not just left: ConnMan's
+// service is removed and the wpa_supplicant block deleted, otherwise the phone
+// rejoins an AP that has no route as soon as the head unit switches it on —
+// including from FM, with nobody asking.
+func RestoreHomeWiFi(logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	ForgetHeadUnitAPs(logf)
+
+	b, err := os.ReadFile(homeSSIDFile)
+	if err != nil {
+		return
+	}
+	home := strings.TrimSpace(string(b))
+	if home == "" {
+		return
+	}
+	if err := connmanJoin(home, ""); err != nil {
+		logf("wifi: could not return to %q: %v", home, err)
+		return
+	}
+	_ = os.Remove(homeSSIDFile)
+	logf("wifi: back on %q", home)
+}
+
+// ForgetHeadUnitAPs removes every carplay_* network ConnMan and wpa_supplicant
+// know about: disconnect, RemoveService, and drop the network block.
+func ForgetHeadUnitAPs(logf func(string, ...any)) {
+	if logf == nil {
+		logf = func(string, ...any) {}
+	}
+	conn, err := dbus.SystemBus()
+	if err == nil {
+		if services, serr := connmanWiFiServices(); serr == nil {
+			for _, svc := range services {
+				if !strings.HasPrefix(strings.ToLower(svc.Name), "carplay_") {
+					continue
+				}
+				obj := conn.Object(connmanService, svc.Path)
+				_ = obj.Call("net.connman.Service.Disconnect", 0).Err
+				if rerr := obj.Call("net.connman.Service.Remove", 0).Err; rerr != nil {
+					logf("wifi: forget %q: %v", svc.Name, rerr)
+					continue
+				}
+				logf("wifi: forgot head unit AP %q", svc.Name)
+			}
+		}
+	}
+	purgeHeadUnitNetworks("")
+}
+
 // lastSSIDFile remembers the SSID we joined last, so a name that does not carry
 // the head unit's prefix is still cleaned up. /run is a tmpfs: one per boot,
 // which is all this needs.
@@ -323,6 +408,9 @@ func wpaJoin(ssid, passphrase string) error {
 
 	args := map[string]dbus.Variant{
 		"ssid": dbus.MakeVariant([]byte(ssid)),
+		// Never rejoin a head unit's AP by itself: it is only valid while the
+		// unit is in its wireless screen, which lasts about a minute.
+		"autostart": dbus.MakeVariant(false),
 	}
 	if passphrase == "" {
 		args["key_mgmt"] = dbus.MakeVariant("NONE")

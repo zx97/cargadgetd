@@ -60,6 +60,27 @@ func waitWifi(ctx context.Context, iface, want, psk, wantIPPrefix string, timeou
 	nextJoin := start
 	prev := ""
 	joins := 0
+	// The interface's network before we touch it: a cancelled or failed join
+	// leaves wlan0 with no SSID and no address, and the phone loses Wi-Fi
+	// entirely until someone notices.
+	homeSSID := wifiSSID(iface)
+	if homeSSID != "" && !strings.EqualFold(homeSSID, want) {
+		RememberHomeSSID(homeSSID)
+	}
+	joined := false
+	defer func() {
+		// Only on failure. Restoring unconditionally switched back to the home
+		// network one second after a successful join, which looked exactly like
+		// the head unit giving up.
+		if joined || homeSSID == "" || strings.EqualFold(homeSSID, want) {
+			return
+		}
+		if err := connmanJoin(homeSSID, ""); err != nil {
+			logf("wifi: could not restore %q: %v", homeSSID, err)
+			return
+		}
+		logf("wifi: restored %q", homeSSID)
+	}()
 	for {
 		ssid := wifiSSID(iface)
 		ip := wifiIPv4(iface)
@@ -76,6 +97,7 @@ func waitWifi(ctx context.Context, iface, want, psk, wantIPPrefix string, timeou
 		if match && ipOK {
 			logf("wifi: %s ssid=%q ip=%s after %s", iface, ssid, ip, sinceText(start))
 			st.Step("Wi-Fi joined: %q (%s)", ssid, ip)
+			joined = true
 			return nil
 		}
 		// A saved network does not switch while another one is preferred.

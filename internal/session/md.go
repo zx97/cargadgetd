@@ -145,6 +145,14 @@ type MD struct {
 	// usbBulk: FunctionFS transport — larger TLS-safe chunks + inter-fragment pause.
 	usbBulk bool
 
+	// ackMu/ackTimes hold the recent MediaAck instants: the rate tells a head
+	// unit that acks every frame from one that batches its acks.
+	ackMu      sync.Mutex
+	ackTimes   [16]time.Time
+	ackPos     int
+	ackN       int
+	windowWide atomic.Bool
+
 	// videoCredit wakes ReserveVideoCredit when a MediaAck arrives.
 	// videoInFlight caps unacked video AUs on USB (max 1).
 	// videoUnackedSince is when that AU's USB write finished (0 if none).
@@ -1152,11 +1160,55 @@ func (m *MD) onVideoAck() {
 	case m.videoCredit <- struct{}{}:
 	default:
 	}
+	m.noteAckTime(time.Now())
 	n := m.ackLogN.Add(1)
 	if n <= 5 || n%25 == 0 {
 		m.log.Printf("video MediaAck #%d (in_flight=%d)", n, m.videoInFlight.Load())
 	}
 	m.lastVideoAckUnix.Store(time.Now().UnixNano())
+}
+
+// noteAckTime records one MediaAck instant for the rate estimate.
+func (m *MD) noteAckTime(t time.Time) {
+	m.ackMu.Lock()
+	m.ackTimes[m.ackPos] = t
+	m.ackPos = (m.ackPos + 1) % len(m.ackTimes)
+	if m.ackN < len(m.ackTimes) {
+		m.ackN++
+	}
+	m.ackMu.Unlock()
+}
+
+// ackRate is the recent MediaAck rate in acks per second (0 until enough
+// samples).
+func (m *MD) ackRate() float64 {
+	m.ackMu.Lock()
+	defer m.ackMu.Unlock()
+	if m.ackN < 4 {
+		return 0
+	}
+	n := len(m.ackTimes)
+	first := m.ackTimes[((m.ackPos-m.ackN)%n+n)%n]
+	last := m.ackTimes[((m.ackPos-1)%n+n)%n]
+	d := last.Sub(first).Seconds()
+	if d <= 0 {
+		return 0
+	}
+	return float64(m.ackN-1) / d
+}
+
+// videoWindow is how many AUs may wait for a MediaAck. It widens when the head
+// unit acks in batches, which is what lets the wired path reach the frame rate
+// the transport allows instead of one frame per ack.
+func (m *MD) videoWindow() int {
+	r := m.ackRate()
+	if r > 0 && r < batchAckRate {
+		if !m.windowWide.Swap(true) {
+			m.log.Printf("video credit: head unit acks %.1f/s, widening the window to %d frames", r, batchAckWindow)
+		}
+		return batchAckWindow
+	}
+	return maxVideoInFlight
 }
 
 // LastVideoAckAge returns time since last video MediaAck (0 if never).
@@ -1823,7 +1875,8 @@ func (m *MD) ReserveVideoCredit(wait time.Duration) error {
 	if !m.videoStreaming.Load() {
 		return ErrNoVideoCredit
 	}
-	if m.videoInFlight.Load() < maxVideoInFlight {
+	window := m.videoWindow()
+	if m.videoInFlight.Load() < int32(window) {
 		m.videoInFlight.Add(1)
 		return nil
 	}
@@ -1832,14 +1885,14 @@ func (m *MD) ReserveVideoCredit(wait time.Duration) error {
 		case <-m.videoCredit:
 		default:
 		}
-		if m.videoInFlight.Load() >= maxVideoInFlight {
+		if m.videoInFlight.Load() >= int32(window) {
 			return ErrNoVideoCredit
 		}
 		m.videoInFlight.Add(1)
 		return nil
 	}
 	deadline := time.After(wait)
-	for m.videoInFlight.Load() >= 1 {
+	for m.videoInFlight.Load() >= int32(window) {
 		select {
 		case <-m.videoCredit:
 		case <-deadline:
@@ -1940,6 +1993,16 @@ const VideoAckGiveUp = 1500 * time.Millisecond
 // assumed one ack per frame. Head units that batch their acks then send one
 // frame per ack (~5fps) and spend their time in the give-up path.
 const maxVideoInFlight = 4
+
+// batchAckWindow is used when the head unit acks far less often than it
+// receives: the lab Melia unit acks one frame in twenty-five, and a window of 4
+// throttled the picture to 1.9 fps while the same unit ran at 21.8 fps over
+// Wi-Fi (which has no such gate).
+const batchAckWindow = 32
+
+// batchAckRate is the ack rate below which the head unit is treated as a batch
+// acker. A DHU acks every frame (~30/s) and never crosses it.
+const batchAckRate = 5.0
 
 // VideoUnackedAge is how long the current USB video AU has been waiting for
 // MediaAck. Zero when nothing is in flight.

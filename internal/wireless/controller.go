@@ -89,6 +89,9 @@ func (c *Controller) Run(ctx context.Context) {
 			}
 			c.logf("session: ended after %s", sinceText(sessionStart))
 			c.finish()
+			// The head unit dropped the projection: put the phone back on its
+			// own network instead of leaving it on the car's AP.
+			RestoreHomeWiFi(c.Opt.logf)
 		}
 
 		c.mu.Lock()
@@ -99,7 +102,10 @@ func (c *Controller) Run(ctx context.Context) {
 		}
 		// Never give up: wait for the car to move (Bluetooth link, AP in range)
 		// and restart the whole cycle as soon as it does, or after max.
-		const maxWait = 15 * time.Second
+		// The head unit's wireless window is short and its service only exists
+		// while it is in its AA screen: retry almost immediately instead of
+		// waiting fifteen seconds and missing it.
+		const maxWait = 3 * time.Second
 		if reason := WaitForChange(ctx, c.Opt, maxWait, c.Opt.logf); reason != "" {
 			c.logf("attempt #%d: situation changed (%s), starting a new cycle now", c.attempts, reason)
 		} else {
