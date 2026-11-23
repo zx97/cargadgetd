@@ -187,7 +187,14 @@ func JoinWiFi(ssid, passphrase string) error {
 		return fmt.Errorf("connman: empty ssid")
 	}
 	// ConnMan does the association, DHCP, route and its own UI bookkeeping.
+	// Purge the previous head-unit networks first. This unit regenerates its
+	// SSID at every session, and each attempt used to leave one behind: the
+	// phone's Wi-Fi list showed two, then three, then four carplay_wifi_
+	// entries, all dead.
+	purgeHeadUnitNetworks(ssid)
+
 	if err := JoinWithAgent(ssid, passphrase, nil); err == nil {
+		_ = os.WriteFile(lastSSIDFile, []byte(ssid+"\n"), 0o600)
 		return nil
 	} else if passphrase == "" {
 		// An open network has no passphrase prompt to answer; the saved-service
@@ -200,6 +207,62 @@ func JoinWiFi(ssid, passphrase string) error {
 			return fmt.Errorf("connman: %v (wpa fallback: %v)", err, werr)
 		}
 		return nil
+	}
+}
+
+// lastSSIDFile remembers the SSID we joined last, so a name that does not carry
+// the head unit's prefix is still cleaned up. /run is a tmpfs: one per boot,
+// which is all this needs.
+const lastSSIDFile = "/run/cargadgetd-wifi-last"
+
+// purgeHeadUnitNetworks removes stale head-unit networks from wpa_supplicant
+// before a new association. It matches the "carplay_" prefix these units use and
+// the SSID we joined last, and never touches anything else.
+func purgeHeadUnitNetworks(keep string) {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return
+	}
+	root := conn.Object(wpaService, wpaPath)
+	var ifacePath dbus.ObjectPath
+	if err := root.Call("fi.w1.wpa_supplicant1.GetInterface", 0, "wlan0").Store(&ifacePath); err != nil {
+		var v dbus.Variant
+		if root.Call("org.freedesktop.DBus.Properties.Get", 0,
+			"fi.w1.wpa_supplicant1", "Interfaces").Store(&v) != nil {
+			return
+		}
+		ifaces, _ := v.Value().([]dbus.ObjectPath)
+		if len(ifaces) == 0 {
+			return
+		}
+		ifacePath = ifaces[0]
+	}
+	last, _ := os.ReadFile(lastSSIDFile)
+	lastSSID := strings.TrimSpace(string(last))
+	iface := conn.Object(wpaService, ifacePath)
+
+	var vnets dbus.Variant
+	if err := iface.Call("org.freedesktop.DBus.Properties.Get", 0,
+		"fi.w1.wpa_supplicant1.Interface", "Networks").Store(&vnets); err != nil {
+		return
+	}
+	nets, _ := vnets.Value().([]dbus.ObjectPath)
+	for _, n := range nets {
+		var props map[string]dbus.Variant
+		if err := conn.Object(wpaService, n).Call("org.freedesktop.DBus.Properties.GetAll", 0,
+			"fi.w1.wpa_supplicant1.Network").Store(&props); err != nil {
+			continue
+		}
+		b, _ := props["ssid"].Value().([]byte)
+		name := string(b)
+		if name == "" || name == keep {
+			continue
+		}
+		stale := strings.HasPrefix(strings.ToLower(name), "carplay_") ||
+			(lastSSID != "" && strings.EqualFold(name, lastSSID))
+		if stale {
+			_ = iface.Call("fi.w1.wpa_supplicant1.Interface.RemoveNetwork", 0, n).Err
+		}
 	}
 }
 
