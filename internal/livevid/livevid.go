@@ -221,11 +221,39 @@ func (r *Renderer) encodeLocked() ([]byte, error) {
 			r.fatalErr = fmt.Errorf("livevid: encoder stalled %d times, ending the session", r.recoveries)
 			return nil, r.fatalErr
 		}
+		// The codec lives in the Android media service, not in this process:
+		// abandoning it keeps the slot busy there. Try to release it anyway,
+		// detached, because droid_close blocks on the same wedge.
+		r.releaseAbandoned(enc)
 		if err := r.openEncoder(); err != nil {
-			return nil, fmt.Errorf("livevid: encoder rebuild: %w", err)
+			return nil, fmt.Errorf("livevid: encoder rebuild: %w (restart the phone if it stays unavailable: the media service has no free codec)", err)
 		}
 		return nil, fmt.Errorf("livevid: encoder stalled, rebuilt")
 	}
+}
+
+// releaseAbandoned asks the wedged encoder to close on a detached goroutine.
+// droid_close goes through the same wedged pipeline, so it may never return;
+// the goroutine is left behind rather than blocking the video loop. When it
+// does return the media service gets its codec slot back, which is what keeps
+// the next create from failing.
+func (r *Renderer) releaseAbandoned(enc codec) {
+	if enc == nil {
+		return
+	}
+	go func() {
+		done := make(chan struct{})
+		go func() {
+			_ = enc.Close()
+			close(done)
+		}()
+		select {
+		case <-done:
+			log.Printf("livevid: abandoned encoder released")
+		case <-time.After(5 * time.Second):
+			log.Printf("livevid: abandoned encoder did not close — its codec slot stays taken")
+		}
+	}()
 }
 
 // acceptLocked validates the access unit and hands it back.

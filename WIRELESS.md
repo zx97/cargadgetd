@@ -421,6 +421,38 @@ Then declare them in `/usr/share/harbour-navit/navit.xml` inside the enabled
 
 `maptool` produces large files: France is about 11 GB from the 5.5 GB PBF.
 
+## Lab head unit: Melia 4.0 (universal 2-DIN)
+
+A cheap universal 2-DIN unit (`CAR BT_603F`, BT MAC `41:00:00:00:9E:F0`) is
+the bench head unit: it accepts the phone over USB, no car, no risk.
+
+```
+OS  : Melia4.0-20220107
+APP : YCar628-M1280-20251229-1439
+MCU : AB5301_20250528_1101
+```
+
+What it teaches:
+
+- **Not Android.** Melia is a small Linux/Qt head-unit OS; Android Auto is a
+  dedicated app (`YCar628`). It is far more stable than the VW MIB3: a broken
+  session stops, the unit itself does not reboot.
+- **Wired Android Auto works** with our stream (version 1.3, SDR, 1280x720,
+  touch and audio), which validates the AVC pipeline on a second decoder.
+- **No wireless Android Auto service**: SDP (PSM 1) and RFCOMM 7/8/9 are
+  refused while a real Android phone connects wirelessly. Either the AA half is
+  wired-only and wireless is CarPlay, or the AA channel is outside 7–9 — the
+  probe now scans 1–30 when SDP fails.
+- The pairing PIN it displays (`0000`) is not what is used: BlueZ pairs with
+  the six-digit numeric comparison and `gadgetctl -bt-pair` confirms it. What
+  broke pairing was a stale bond, not the PIN length.
+- Its Bluetooth MAC is fixed, so one pairing lasts.
+
+`encprobe` (cmd/encprobe) encodes a moving pattern on the phone alone, without
+a head unit, and reports stalls: `encprobe -seconds 600`. It proved the encoder
+healthy (436 frames, 0 errors) while a session on the unit was frozen, which is
+what pointed at the codec wedge rather than the car.
+
 ## Known limitations
 
 - The `libreversegearhead` certificate expired on 2026-10-28; at least one car
