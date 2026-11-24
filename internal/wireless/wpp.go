@@ -317,6 +317,21 @@ func buildVersionResponse(major, minor uint64) []byte {
 	return pbAppendVarint(b, 4, wppStatusSuccess)
 }
 
+// buildStartResponse acknowledges a StartRequest: ip_address=1, port=2,
+// status=3. The head unit waits for it before opening its end; without it the
+// TCP connection stays open and the unit never speaks (open-headunit's state
+// machine, cross-checked with aa-proxy and ZLink, sends type 7 after type 1).
+func buildStartResponse(ip string, port int, status uint64) []byte {
+	var b []byte
+	if ip != "" {
+		b = pbAppendString(b, 1, ip)
+	}
+	if port > 0 {
+		b = pbAppendVarint(b, 2, uint64(port))
+	}
+	return pbAppendVarint(b, 3, status)
+}
+
 // buildConnectStatus is WifiConnectStatus: status=1, error_message_hint=2.
 func buildConnectStatus(status uint64) []byte {
 	return pbAppendVarint(nil, 1, status)

@@ -577,6 +577,12 @@ waitLoop:
 					st.Step("Car endpoint: %s", endpoint)
 				}
 				opt.logf("wpp start request: endpoint=%q", endpoint)
+				// Acknowledge it: the head unit waits for WifiStartResponse before
+				// opening its end. Missing it left the TCP connection open and the
+				// unit mute on its pairing screen.
+				if err := send(wppStartResponse, buildStartResponse(ip, port, wppStatusSuccess), "start response"); err != nil {
+					return nil, err
+				}
 			case wppStartResponse:
 				ip, port := parseStartEndpoint(pkt.Payload)
 				if ip != "" {

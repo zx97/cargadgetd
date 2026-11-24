@@ -69,10 +69,14 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 		select {
 		case r := <-done:
 			rc, err = r.rc, r.err
-		case <-time.After(4 * time.Second):
+		case <-time.After(1500 * time.Millisecond):
+			// A refused channel answers in ~40ms; a hanging one means no service
+			// at all (head unit off, or out of range). 4s per channel made a
+			// scan without a head unit take two minutes, which is far too slow
+			// to ever catch a one-minute window.
 			hangs++
-			logf("probe: channel %d: no answer within 4s, skipping", ch)
-			if hangs >= 8 {
+			logf("probe: channel %d: no answer within 1.5s, skipping", ch)
+			if hangs >= 5 {
 				return 0, fmt.Errorf("probe: %d channels never answered, the controller is not responding", hangs)
 			}
 			continue
