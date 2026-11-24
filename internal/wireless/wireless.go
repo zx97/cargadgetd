@@ -12,6 +12,12 @@ import (
 	"time"
 )
 
+// promptAfter is how long the handshake waits for the head unit to open the WPP
+// exchange before sending its own version and info request. Android Auto answers
+// the unit's version request 5.4 s after the RFCOMM connect on the bench, so
+// anything shorter would speak over a unit that was about to start.
+const promptAfter = 6 * time.Second
+
 // Options configures the Wireless Android Auto bootstrap.
 type Options struct {
 	// Name matches the paired head unit name (case-insensitive substring).
@@ -478,16 +484,15 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		return nil
 	}
 
-	// The legacy handshake starts with the phone asking for the AP info.
-	// The phone opens the exchange with its version. The lab unit waited about
-	// sixteen seconds for this before sending its own version request, which is
-	// most of the time a short wireless window can afford.
-	if err := send(wppVersionRequest, buildVersionRequest(1, 0), "version request 1.0"); err != nil {
-		return nil, err
-	}
-	if err := send(wppInfoRequest, nil, "info request"); err != nil {
-		return nil, err
-	}
+	// Which side opens the exchange depends on the head unit. Android Auto never
+	// speaks first: it waits, and the bench unit sends its version request up to
+	// ~5.4s after the RFCOMM connect (measured). Our earlier code sent that
+	// version request itself, and the unit then only answered the info request
+	// (id=3) without ever sending its start request (id=1): the projection stayed
+	// mute behind an accepted TCP socket. Wait first, and only prompt after a
+	// grace period, so a unit that expects the phone to speak still gets an answer.
+	promptAt := time.Now().Add(promptAfter)
+	prompted := false
 	idleSince := time.Now()
 
 	var (
@@ -517,6 +522,19 @@ waitLoop:
 		// never sends id=1 at all. Once the SSID is known, leave the loop after a
 		// short grace period so the join and the TCP dial can happen; the endpoint
 		// falls back to the access point gateway just below.
+		if !prompted && time.Now().After(promptAt) {
+			// Nothing came from the unit: fall back to asking ourselves, which is
+			// what units that expect the phone to open the exchange need.
+			prompted = true
+			opt.logf("wpp: nothing from the unit after %s, prompting with version+info request", promptAfter)
+			if err := send(wppVersionRequest, buildVersionRequest(1, 0), "version request 1.0"); err != nil {
+				return nil, err
+			}
+			if err := send(wppInfoRequest, nil, "info request"); err != nil {
+				return nil, err
+			}
+			idleSince = time.Now()
+		}
 		if ssid != "" {
 			if ssidSeen.IsZero() {
 				ssidSeen = time.Now()
