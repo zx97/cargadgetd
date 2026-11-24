@@ -87,7 +87,7 @@ type Status struct {
 	usbName     string
 }
 
-const wppLogMax = 60
+const wppLogMax = 300
 
 // NewStatus returns an empty status.
 func NewStatus() *Status {
@@ -239,8 +239,8 @@ func (s *Status) Step(format string, args ...any) {
 	}
 	s.mu.Lock()
 	s.steps = append(s.steps, stepEntry{at: time.Now(), tmpl: format, args: args})
-	if len(s.steps) > 40 {
-		s.steps = s.steps[len(s.steps)-40:]
+	if len(s.steps) > 200 {
+		s.steps = s.steps[len(s.steps)-200:]
 	}
 	s.mu.Unlock()
 }
