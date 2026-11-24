@@ -14,8 +14,11 @@ import (
 // fails. A VW MIB3 publishes Android Auto (UUID 4de17a00…) as a vendor "SPP"
 // record on channel 7 and its generic SPP service on 8 — dialling 8 reaches a
 // service that never speaks WPP, which looked like "the car ignores us".
-// The rest are common AA channels on other head units.
-var candidateAAChannels = []uint8{7, 8, 9}
+// The rest are common AA channels on other head units. Channel 1 comes first:
+// the bench unit publishes Android Auto there (its own SDP says so) and a channel
+// with no listener is refused in ~40ms on this stack, so trying it first costs
+// nothing and saves a whole attempt on units whose wireless window is short.
+var candidateAAChannels = []uint8{1, 7, 8, 9}
 
 // fullScan is the rest of the RFCOMM range, probed only when the common
 // channels are refused. A universal head unit with a working phone picked its
