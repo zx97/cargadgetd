@@ -3,6 +3,7 @@ package wireless
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -105,6 +106,27 @@ func TestBuildVersionResponse(t *testing.T) {
 	}
 	if v, _ := pbLastVarint(f, 4); v != wppStatusSuccess {
 		t.Fatalf("status=%d", v)
+	}
+}
+
+func TestBuildStartResponse(t *testing.T) {
+	// Measured on a working commercial session (payload-level HCI capture):
+	// WifiStartResponse carries field 3 (status) alone, no ip_address, no port.
+	// The wire frame is 00 02 00 07 18 00.
+	resp := buildStartResponse(wppStatusSuccess)
+	if got, want := fmt.Sprintf("%x", resp), "1800"; got != want {
+		t.Fatalf("payload = %s, want %s", got, want)
+	}
+	f := pbParse(resp)
+	if len(f) != 1 || f[0].Num != 3 || f[0].Var != wppStatusSuccess {
+		t.Fatalf("unexpected fields: %+v", f)
+	}
+	var buf bytes.Buffer
+	if err := writeWPP(&buf, wppStartResponse, resp); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := fmt.Sprintf("%x", buf.Bytes()), "000200071800"; got != want {
+		t.Fatalf("frame = %s, want %s", got, want)
 	}
 }
 
