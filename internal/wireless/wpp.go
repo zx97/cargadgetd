@@ -300,6 +300,14 @@ func parseSetupInfo(p []byte) (ip string, port int, ssid, key, bssid string, sec
 	return
 }
 
+// buildVersionRequest is WifiVersionRequest: major=1, minor=2.
+func buildVersionRequest(major, minor uint64) []byte {
+	var b []byte
+	b = pbAppendVarint(b, 1, major)
+	b = pbAppendVarint(b, 2, minor)
+	return b
+}
+
 // buildVersionResponse is WifiVersionResponse: major=1, minor=2,
 // device_serial=3, status=4.
 func buildVersionResponse(major, minor uint64) []byte {

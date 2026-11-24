@@ -443,6 +443,12 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 	}
 
 	// The legacy handshake starts with the phone asking for the AP info.
+	// The phone opens the exchange with its version. The lab unit waited about
+	// sixteen seconds for this before sending its own version request, which is
+	// most of the time a short wireless window can afford.
+	if err := send(wppVersionRequest, buildVersionRequest(1, 0), "version request 1.0"); err != nil {
+		return nil, err
+	}
 	if err := send(wppInfoRequest, nil, "info request"); err != nil {
 		return nil, err
 	}
@@ -624,7 +630,9 @@ waitLoop:
 		st.Set("Car TCP", false, err.Error())
 		return nil, fmt.Errorf("tcp dial %s after %s: %w", endpoint, sinceText(t), err)
 	}
-	st.Set("Car TCP", true, endpoint)
+	// Connected is not working: the car still has to speak (TLS client hello,
+	// then the version request). Say so instead of a bare endpoint.
+	st.Setf("Car TCP", true, "connected to %s, waiting for the car", endpoint)
 	st.Set("Android Auto session", true, "TCP connected")
 	st.Phase("session")
 	opt.logf("tcp: connected to %s in %s", endpoint, sinceText(t))

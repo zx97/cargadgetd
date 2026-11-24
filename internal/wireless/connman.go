@@ -210,6 +210,87 @@ func JoinWiFi(ssid, passphrase string) error {
 	}
 }
 
+// suspendedFile lists the services whose AutoConnect we turned off while the
+// phone is on a head unit's AP.
+const suspendedFile = "/run/cargadgetd-wifi-suspended"
+
+// suspendOtherAutoConnect stops ConnMan from pulling the interface back to a
+// saved network while we are joining the head unit's AP. Without it the
+// interface flapped between carplay_wifi_XXXX and the home network every few
+// seconds and never kept the association long enough for a DHCP lease.
+func suspendOtherAutoConnect(target string) {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return
+	}
+	services, err := connmanWiFiServices()
+	if err != nil {
+		return
+	}
+	var saved []string
+	for _, svc := range services {
+		if strings.EqualFold(svc.Name, target) {
+			continue
+		}
+		if connmanBoolProperty(conn, svc.Path, "AutoConnect") {
+			if err := conn.Object(connmanService, svc.Path).
+				Call("org.freedesktop.DBus.Properties.Set", 0,
+					"net.connman.Service", "AutoConnect", dbus.MakeVariant(false)).Err; err != nil {
+				continue
+			}
+			saved = append(saved, svc.Name)
+		}
+	}
+	if len(saved) > 0 {
+		_ = os.WriteFile(suspendedFile, []byte(strings.Join(saved, "\n")+"\n"), 0o644)
+	}
+}
+
+// resumeAutoConnect gives the saved networks their auto-connect back.
+func resumeAutoConnect(logf func(string, ...any)) {
+	b, err := os.ReadFile(suspendedFile)
+	if err != nil {
+		return
+	}
+	names := strings.Fields(string(b))
+	if len(names) == 0 {
+		_ = os.Remove(suspendedFile)
+		return
+	}
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return
+	}
+	services, err := connmanWiFiServices()
+	if err != nil {
+		return
+	}
+	for _, svc := range services {
+		for _, name := range names {
+			if !strings.EqualFold(svc.Name, name) {
+				continue
+			}
+			if err := conn.Object(connmanService, svc.Path).
+				Call("org.freedesktop.DBus.Properties.Set", 0,
+					"net.connman.Service", "AutoConnect", dbus.MakeVariant(true)).Err; err == nil && logf != nil {
+				logf("wifi: auto-connect restored for %q", svc.Name)
+			}
+		}
+	}
+	_ = os.Remove(suspendedFile)
+}
+
+// connmanBoolProperty reads one boolean property of a service.
+func connmanBoolProperty(conn *dbus.Conn, path dbus.ObjectPath, name string) bool {
+	var v dbus.Variant
+	if err := conn.Object(connmanService, path).
+		Call("org.freedesktop.DBus.Properties.Get", 0, "net.connman.Service", name).Store(&v); err != nil {
+		return false
+	}
+	b, _ := v.Value().(bool)
+	return b
+}
+
 // homeSSIDFile remembers the network the phone was on before we took it to a
 // head unit's AP, so it can be put back when the session fails or ends.
 const homeSSIDFile = "/run/cargadgetd-wifi-home"
@@ -252,6 +333,7 @@ func RestoreHomeWiFi(logf func(string, ...any)) {
 		logf = func(string, ...any) {}
 	}
 	ForgetHeadUnitAPs(logf)
+	resumeAutoConnect(logf)
 
 	b, err := os.ReadFile(homeSSIDFile)
 	if err != nil {
