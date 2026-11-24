@@ -7,8 +7,6 @@ import (
 	"net"
 	"os"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -397,30 +395,12 @@ func humanBluetoothError(err error) error {
 // handshake runs the WPP exchange on rc, joins the car's AP, and returns the
 // TCP connection where the phone is the TLS server.
 func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess string) (conn net.Conn, err error) {
-	// The Wi-Fi join runs in parallel with the rest of the WPP exchange: the
-	// credentials arrive early (InfoResponse) but the endpoint only later, and
-	// the head unit's wireless window is short. Sequential joins cost the sum
-	// of both, parallel ones the maximum.
-	var joinOnce sync.Once
-	var joinErr atomic.Value // stores the error string, for the log
-	joinCtx, cancelJoins := context.WithCancel(ctx)
-	defer cancelJoins()
-	startJoin := func(wantSSID, wantKey string) {
-		if wantSSID == "" {
-			return
-		}
-		joinOnce.Do(func() {
-			go func() {
-				t := time.Now()
-				if err := connmanJoinCtx(joinCtx, wantSSID, wantKey); err != nil {
-					joinErr.Store(err.Error())
-					opt.logf("wifi: parallel join %q failed after %s: %v", wantSSID, sinceText(t), err)
-					return
-				}
-				opt.logf("wifi: parallel join %q done in %s", wantSSID, sinceText(t))
-			}()
-		})
-	}
+	// The join is left to waitWifi alone. It used to start in parallel here as
+	// soon as the credentials arrived, and waitWifi then asked ConnMan again: two
+	// joins racing on the same interface. On the bench that showed as an
+	// association that came up and dropped repeatedly ("ssid" empty, then set,
+	// then empty) with no DHCP lease, so the projection never reached TCP. A
+	// single join costs a few hundred milliseconds more and is stable.
 
 	t := time.Now()
 
@@ -598,7 +578,6 @@ waitLoop:
 				}
 				opt.logf("wpp setup: endpoint=%q ssid=%q key_len=%d bssid=%q security=%d",
 					endpoint, ssid, len(key), bssid, security)
-				startJoin(ssid, key)
 			case wppInfoResponse:
 				s, k, b, sec := parseInfoResponse(pkt.Payload)
 				if s != "" {
@@ -609,7 +588,6 @@ waitLoop:
 				}
 				opt.logf("wpp info: ssid=%q key_len=%d bssid=%q security=%d",
 					ssid, len(key), bssid, security)
-				startJoin(ssid, key)
 			case wppStartRequest:
 				ip, port := parseStartEndpoint(pkt.Payload)
 				if ip != "" {

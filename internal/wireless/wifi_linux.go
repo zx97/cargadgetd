@@ -130,8 +130,10 @@ func waitWifi(ctx context.Context, iface, want, psk, wantIPPrefix string, timeou
 			return nil
 		}
 		// A saved network does not switch while another one is preferred.
-		// Ask ConnMan to connect the car's AP, then keep polling.
-		if want != "" && time.Now().After(nextJoin) {
+		// Ask ConnMan to connect the car's AP, then keep polling. Only while the
+		// interface is not on the wanted SSID: re-issuing the join once the
+		// association is up (waiting for DHCP) made the link flap on the bench.
+		if want != "" && !match && time.Now().After(nextJoin) {
 			nextJoin = time.Now().Add(10 * time.Second)
 			joins++
 			t := time.Now()
