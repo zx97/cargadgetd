@@ -96,6 +96,15 @@ func waitWifi(ctx context.Context, iface, want, psk, wantIPPrefix string, timeou
 	if homeSSID != "" && !strings.EqualFold(homeSSID, want) {
 		RememberHomeSSID(homeSSID)
 	}
+	// The join runs in its own goroutine: connmanJoin only returns once ConnMan
+	// reports the service, which took 19-30s on the bench while the association
+	// and the DHCP lease were already usable. Blocking here wasted the head unit's
+	// whole window. One join at a time, cancelled when we leave.
+	joinCtx, cancelJoins := context.WithCancel(ctx)
+	defer cancelJoins()
+	joinCh := make(chan error, 1)
+	joinBusy := false
+
 	joined := false
 	defer func() {
 		// Only on failure. Restoring unconditionally switched back to the home
@@ -133,23 +142,37 @@ func waitWifi(ctx context.Context, iface, want, psk, wantIPPrefix string, timeou
 		// Ask ConnMan to connect the car's AP, then keep polling. Only while the
 		// interface is not on the wanted SSID: re-issuing the join once the
 		// association is up (waiting for DHCP) made the link flap on the bench.
-		if want != "" && !match && time.Now().After(nextJoin) {
-			nextJoin = time.Now().Add(10 * time.Second)
+		if want != "" && !match && !joinBusy && time.Now().After(nextJoin) {
+			joinBusy = true
 			joins++
-			t := time.Now()
-			if err := connmanJoin(want, psk); err != nil {
-				logf("wifi: join #%d %q failed after %s: %v", joins, want, sinceText(t), err)
-				st.Set("Wi-Fi join", false, err.Error())
-			} else {
-				logf("wifi: join #%d %q accepted by ConnMan in %s", joins, want, sinceText(t))
-				st.Set("Wi-Fi join", true, "requested from ConnMan")
-			}
+			n := joins
+			go func() {
+				t := time.Now()
+				err := connmanJoinCtx(joinCtx, want, psk)
+				if err != nil {
+					logf("wifi: join #%d %q failed after %s: %v", n, want, sinceText(t), err)
+				} else {
+					logf("wifi: join #%d %q accepted by ConnMan in %s", n, want, sinceText(t))
+				}
+				select {
+				case joinCh <- err:
+				default:
+				}
+			}()
 		}
 		if time.Since(start) > timeout {
 			return fmt.Errorf("wifi: %s not on %q with IPv4 after %s (ssid=%q ip=%q, %d join calls)",
 				iface, want, timeout, ssid, ip, joins)
 		}
 		select {
+		case err := <-joinCh:
+			joinBusy = false
+			nextJoin = time.Now().Add(2 * time.Second)
+			if err != nil {
+				st.Set("Wi-Fi join", false, err.Error())
+			} else {
+				st.Set("Wi-Fi join", true, "accepted by ConnMan")
+			}
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
