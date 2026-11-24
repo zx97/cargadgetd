@@ -580,7 +580,7 @@ waitLoop:
 				// Acknowledge it: the head unit waits for WifiStartResponse before
 				// opening its end. Missing it left the TCP connection open and the
 				// unit mute on its pairing screen.
-				if err := send(wppStartResponse, buildStartResponse(ip, port, wppStatusSuccess), "start response"); err != nil {
+				if err := send(wppStartResponse, buildStartResponse(wppStatusSuccess), "start response"); err != nil {
 					return nil, err
 				}
 			case wppStartResponse:

@@ -317,19 +317,20 @@ func buildVersionResponse(major, minor uint64) []byte {
 	return pbAppendVarint(b, 4, wppStatusSuccess)
 }
 
-// buildStartResponse acknowledges a StartRequest: ip_address=1, port=2,
-// status=3. The head unit waits for it before opening its end; without it the
-// TCP connection stays open and the unit never speaks (open-headunit's state
+// buildStartResponse acknowledges a StartRequest with status=3 only.
+//
+// The head unit waits for it before opening its end; without it the TCP
+// connection stays open and the unit never speaks (open-headunit's state
 // machine, cross-checked with aa-proxy and ZLink, sends type 7 after type 1).
-func buildStartResponse(ip string, port int, status uint64) []byte {
-	var b []byte
-	if ip != "" {
-		b = pbAppendString(b, 1, ip)
-	}
-	if port > 0 {
-		b = pbAppendVarint(b, 2, uint64(port))
-	}
-	return pbAppendVarint(b, 3, status)
+//
+// Payload measured on a working commercial session (payload-level HCI capture,
+// see captures/sunny-root/AA-REFERENCE-HANDSHAKE.md): Android Auto sends
+// exactly 18 00 - field 3 alone, no ip_address, no port. The earlier version of
+// this builder echoed ip_address=1 and port=2 as well; a strict parser on the
+// unit may reject the extra fields, which matches the occasional "TCP accepted
+// but the unit stays mute" symptom. Keep this message minimal.
+func buildStartResponse(status uint64) []byte {
+	return pbAppendVarint(nil, 3, status)
 }
 
 // buildConnectStatus is WifiConnectStatus: status=1, error_message_hint=2.
