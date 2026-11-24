@@ -1,6 +1,7 @@
 package wireless
 
 import (
+	"context"
 	"time"
 )
 
@@ -32,7 +33,7 @@ func ConnectHeadUnit(address string, attempts int, logf func(string, ...any)) {
 	}
 	for i := 1; i <= attempts; i++ {
 		t := time.Now()
-		err := dev.Connect()
+		err := dev.Connect(context.Background())
 		if err != nil {
 			logf("bt-link: Device1.Connect attempt %d/%d failed after %s: %v", i, attempts, sinceText(t), err)
 			time.Sleep(3 * time.Second)

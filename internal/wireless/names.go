@@ -21,10 +21,7 @@ import (
 // phone, and the app says so instead of leaving the user to guess.
 func LocalNames() (bt, address, usb string) {
 	if conn, err := dbus.SystemBus(); err == nil {
-		var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
-		if err := conn.Object(bluezService, "/").
-			Call("org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).
-			Store(&managed); err == nil {
+		if managed, merr := managedObjects(conn); merr == nil {
 			for _, ifaces := range managed {
 				props, ok := ifaces["org.bluez.Adapter1"]
 				if !ok {

@@ -270,7 +270,7 @@ func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, g
 		opt.logf("bluetooth: link already up, no page needed")
 		st.Set("Bluetooth link", true, "link up")
 	} else {
-		linkErr = cand.Connect()
+		linkErr = cand.Connect(ctx)
 		if linkErr != nil {
 			opt.logf("bluetooth: Device1.Connect failed after %s: %v", sinceText(t), linkErr)
 		} else {

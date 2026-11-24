@@ -5,6 +5,7 @@
 package wireless
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"sort"
@@ -47,6 +48,23 @@ func FindDevice(name, address string) (*Device, error) {
 	return devs[0], nil
 }
 
+// managedObjects reads BlueZ's object tree with a bounded context. BlueZ can stop
+// answering on the system bus, and an unbounded Call froze the whole daemon with
+// no log line (SIGQUIT dump: the main goroutine sat in Device1.Connect for forty
+// minutes without writing anything).
+func managedObjects(conn *dbus.Conn) (map[dbus.ObjectPath]map[string]map[string]dbus.Variant, error) {
+	var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
+	cctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	err := conn.Object(bluezService, "/").
+		CallWithContext(cctx, "org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).
+		Store(&managed)
+	if cctx.Err() == context.DeadlineExceeded {
+		return nil, fmt.Errorf("bluez: GetManagedObjects did not answer within 10s")
+	}
+	return managed, err
+}
+
 // FindDevices returns the paired devices to try, best first. With a selector it
 // returns only the match. Without one every paired device is a candidate, the
 // one advertising the Android Auto UUID first: a head unit that is switched off
@@ -56,9 +74,8 @@ func FindDevices(name, address string) ([]*Device, error) {
 	if err != nil {
 		return nil, fmt.Errorf("system bus: %w", err)
 	}
-	var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
-	obj := conn.Object(bluezService, "/")
-	if err := obj.Call("org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).Store(&managed); err != nil {
+	managed, err := managedObjects(conn)
+	if err != nil {
 		return nil, fmt.Errorf("bluez managed objects: %w", err)
 	}
 	var all []*Device
@@ -146,12 +163,25 @@ func hasUUID(uuids []string, want string) bool {
 
 // Connect brings up the Bluetooth link and the head unit's profiles (HFP/A2DP)
 // before the RFCOMM connect. The AA handshake needs the car's HFP AG link.
-func (d *Device) Connect() error {
+//
+// The call is bounded. BlueZ accepts org.bluez.Device1.Connect and then may never
+// answer - typically when the peer stops answering the page - and a bare Call
+// blocks the caller for ever: a SIGQUIT dump on the bench showed the main
+// goroutine stuck here for forty minutes without a single log line. A timeout
+// turns that silent freeze into an ordinary failure the retry loop can act on.
+func (d *Device) Connect(ctx context.Context) error {
 	conn, err := dbus.SystemBus()
 	if err != nil {
 		return fmt.Errorf("system bus: %w", err)
 	}
-	return conn.Object(bluezService, d.Path).Call("org.bluez.Device1.Connect", 0).Err
+	cctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	err = conn.Object(bluezService, d.Path).
+		CallWithContext(cctx, "org.bluez.Device1.Connect", 0).Err
+	if cctx.Err() == context.DeadlineExceeded {
+		return fmt.Errorf("bluez: connect %s did not answer within 20s", d.Address)
+	}
+	return err
 }
 
 // AdapterSetup powers the adapter, disables the discoverable/pairable timeouts

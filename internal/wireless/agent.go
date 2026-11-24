@@ -273,8 +273,8 @@ func createDevice(conn *dbus.Conn, address string, logf func(string, ...any)) er
 
 // adapterPath returns the first BlueZ adapter path.
 func adapterPath(conn *dbus.Conn) (dbus.ObjectPath, error) {
-	var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
-	if err := conn.Object(bluezService, "/").Call("org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).Store(&managed); err != nil {
+	managed, err := managedObjects(conn)
+	if err != nil {
 		return "", fmt.Errorf("bluez managed objects: %w", err)
 	}
 	for path, ifaces := range managed {
@@ -314,8 +314,7 @@ func UnpairDevice(address string, logf func(string, ...any)) error {
 // when the selector is not a MAC. Head units with a random address change it
 // at every boot, so the name is often the only stable handle.
 func devicePath(conn *dbus.Conn, selector string) (dbus.ObjectPath, error) {
-	var managed map[dbus.ObjectPath]map[string]map[string]dbus.Variant
-	err := conn.Object(bluezService, "/").Call("org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).Store(&managed)
+	managed, err := managedObjects(conn)
 	if err != nil {
 		return "", fmt.Errorf("bluez managed objects: %w", err)
 	}
