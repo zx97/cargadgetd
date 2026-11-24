@@ -326,6 +326,11 @@ func main() {
 	}
 }
 
+// sessionReadyTimeout bounds the wait for the head unit's first frame after the
+// transport is up. Wireless head units can accept the TCP connection and stay
+// silent; a bound turns that into a retry instead of a stuck phone.
+const sessionReadyTimeout = 25 * time.Second
+
 func runSession(md *session.MD, autoAV, usbPace bool) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- md.Run() }()
@@ -799,6 +804,13 @@ func runSession(md *session.MD, autoAV, usbPace bool) {
 		}
 	case err := <-errCh:
 		log.Printf("session ended early (handshake/SDR): %v", err)
+		return
+	case <-time.After(sessionReadyTimeout):
+		// Wireless: the enquiry reaches "session Android Auto" and the head unit
+		// can stay completely mute on the TCP connection. Without this bound
+		// runSession blocked for ever, the phone stayed on the car's access point
+		// (no route) and only a Wi-Fi restart got it back.
+		log.Printf("session: the head unit sent nothing in %s, dropping the connection", sessionReadyTimeout)
 		return
 	}
 }

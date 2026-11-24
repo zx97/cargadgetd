@@ -100,7 +100,14 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	}
 	dev := devices[0]
 	opt.logf("bluetooth: %d paired candidate(s) in %s", len(devices), sinceText(t))
-	st.Setf("Bluetooth paired", true, "%s %s", dev.Name, dev.Address)
+	// "Paired" is a bond: it survives the head unit being switched off, so it must
+	// not read as "ready". Show the live link state in the same line, and keep the
+	// check green only while the link is actually up.
+	linkState := "paired, not connected"
+	if dev.Connected {
+		linkState = "connected"
+	}
+	st.Setf("Bluetooth paired", dev.Connected, "%s %s — %s", dev.Name, dev.Address, linkState)
 	for i, c := range devices {
 		opt.logf("bluetooth: candidate %d/%d %s addr=%s trusted=%v connected=%v adapter=%s uuids=%v",
 			i+1, len(devices), c.Name, c.Address, c.Trusted, c.Connected, c.Adapter, c.UUIDs)

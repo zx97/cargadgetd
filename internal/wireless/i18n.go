@@ -47,13 +47,15 @@ var translations = map[string]map[string]string{
 		"state: %s · step: %s":   "état : %s · étape : %s",
 
 		// Workflow stages
-		"Bluetooth paired":     "Bluetooth appairé",
-		"Android Auto profile": "Profil Android Auto publié",
-		"RFCOMM channel":       "Canal RFCOMM trouvé",
-		"WPP credentials":      "WPP : identifiants Wi-Fi",
-		"Car Wi-Fi":            "Wi-Fi de la voiture",
-		"TCP + TLS":            "TCP + TLS",
-		"Android Auto session": "Session Android Auto",
+		"Bluetooth":             "Bluetooth",
+		"Bluetooth paired":      "Bluetooth appairé",
+		"paired, not connected": "appairé, non connecté",
+		"Android Auto profile":  "Profil Android Auto publié",
+		"RFCOMM channel":        "Canal RFCOMM trouvé",
+		"WPP credentials":       "WPP : identifiants Wi-Fi",
+		"Car Wi-Fi":             "Wi-Fi de la voiture",
+		"TCP + TLS":             "TCP + TLS",
+		"Android Auto session":  "Session Android Auto",
 
 		// Check names
 		"Bluetooth link":  "Lien Bluetooth",
