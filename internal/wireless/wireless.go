@@ -691,10 +691,22 @@ waitLoop:
 
 	st.Phase("tcp")
 	t = time.Now()
-	conn, err = net.DialTimeout("tcp", endpoint, 10*time.Second)
-	if err != nil {
-		st.Set("Car TCP", false, err.Error())
-		return nil, fmt.Errorf("tcp dial %s after %s: %w", endpoint, sinceText(t), err)
+	// The interface reports the head unit's address a moment before the kernel has
+	// the route to its subnet, and dialling straight away failed on the bench with
+	// "connect: no route to host" while wlan0 already had 192.168.43.2. Retry
+	// briefly instead of dropping a handshake that has just succeeded.
+	var dialErr error
+	for attempt := 1; attempt <= 6; attempt++ {
+		conn, dialErr = net.DialTimeout("tcp", endpoint, 3*time.Second)
+		if dialErr == nil {
+			break
+		}
+		opt.logf("tcp: dial %s attempt %d/6 failed after %s: %v", endpoint, attempt, sinceText(t), dialErr)
+		time.Sleep(400 * time.Millisecond)
+	}
+	if dialErr != nil {
+		st.Set("Car TCP", false, dialErr.Error())
+		return nil, fmt.Errorf("tcp dial %s after %s: %w", endpoint, sinceText(t), dialErr)
 	}
 	// Connected is not working: the car still has to speak (TLS client hello,
 	// then the version request). Say so instead of a bare endpoint.
