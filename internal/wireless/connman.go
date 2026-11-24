@@ -195,6 +195,12 @@ func JoinWiFi(ssid, passphrase string) error {
 	if strings.TrimSpace(ssid) == "" {
 		return fmt.Errorf("connman: empty ssid")
 	}
+	// Stop ConnMan from pulling the interface back to a saved network while we
+	// are on the head unit's AP. This function existed but was never called: the
+	// bench logs showed the interface flapping between carplay_wifi_XXXX and the
+	// home network every few seconds, never keeping the association long enough
+	// for a DHCP lease. RestoreHomeWiFi resumes them.
+	suspendOtherAutoConnect(ssid)
 	// ConnMan does the association, DHCP, route and its own UI bookkeeping.
 	// Purge the previous head-unit networks first. This unit regenerates its
 	// SSID at every session, and each attempt used to leave one behind: the
