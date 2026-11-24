@@ -237,8 +237,8 @@ button{flex:1;padding:14px;font-size:1rem;border-radius:10px;border:0;color:#fff
 .tab.active{background:#122534;color:#e7e9ee;border-color:#3498db;font-weight:700}
 .pane{display:none}.pane.active{display:block}
 pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;overflow:auto;font-size:.78rem;white-space:pre-wrap;word-break:break-word}
-#p-log pre{height:44vh;min-height:180px;overflow:auto;-webkit-overflow-scrolling:touch}
-#wpp{height:34vh;min-height:140px}
+#p-log pre{height:62vh;min-height:260px;overflow:auto;-webkit-overflow-scrolling:touch}
+#wpp{height:46vh;min-height:200px}
 </style></head><body>`)
 	fmt.Fprintf(&b, "<h1>%s</h1>", html.EscapeString(T(lang, "Cargadgetd Wireless")))
 

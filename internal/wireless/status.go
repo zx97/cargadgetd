@@ -109,8 +109,9 @@ func (s *Status) Reset() {
 	s.checks = make(map[string]*Check)
 	s.order = nil
 	s.err = ""
-	s.wpp = nil
-	s.steps = nil
+	// steps and wpp are deliberately kept: they are the journal the user reads,
+	// and clearing them at every attempt left five lines on screen while the
+	// daemon retried every few seconds. Both are capped in Step/WPP.
 	s.wifiWant = ""
 }
 

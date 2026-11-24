@@ -149,7 +149,7 @@ func main() {
 	btName, btAddr, usbName := wireless.LocalNames()
 	log.Printf("wireless: car sees bluetooth name=%q addr=%s, usb name=%q", btName, btAddr, usbName)
 
-	serve := func(rw io.ReadWriteCloser, peer string, usbBulk bool) {
+	serve := func(rw io.ReadWriteCloser, peer string, usbBulk bool, onReady func()) {
 		defer rw.Close()
 		log.Printf("HU connected from %s", peer)
 		if usbBulk {
@@ -182,7 +182,7 @@ func main() {
 		}
 		mdMu.md = md
 		defer func() { mdMu.md = nil }()
-		runSession(md, *autoAV, usbBulk)
+		runSession(md, *autoAV, usbBulk, onReady)
 	}
 
 	if *wirelessFlag {
@@ -204,7 +204,11 @@ func main() {
 			Passive:   *wirelessPassive,
 			Logf:      log.Printf,
 		}, st, func(conn net.Conn) {
-			serve(conn, "wireless", false)
+			// "Session Android Auto" only turns green when the head unit has
+			// really started it (SDR received), not when TCP merely connected.
+			serve(conn, "wireless", false, func() {
+				st.Set("Android Auto session", true, "open (SDR received)")
+			})
 		})
 		go ctl.Run(context.Background())
 		addr := fmt.Sprintf("127.0.0.1:%d", *wirelessWeb)
@@ -273,7 +277,7 @@ func main() {
 				case <-stop:
 				}
 			}()
-			serve(eps, "usb-ffs:"+dir, true)
+			serve(eps, "usb-ffs:"+dir, true, nil)
 			close(stop)
 			wasActive := eps.Active()
 			_ = eps.Close()
@@ -322,7 +326,7 @@ func main() {
 			log.Printf("accept: %v", err)
 			continue
 		}
-		go serve(conn, conn.RemoteAddr().String(), false)
+		go serve(conn, conn.RemoteAddr().String(), false, nil)
 	}
 }
 
@@ -331,7 +335,7 @@ func main() {
 // silent; a bound turns that into a retry instead of a stuck phone.
 const sessionReadyTimeout = 25 * time.Second
 
-func runSession(md *session.MD, autoAV, usbPace bool) {
+func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- md.Run() }()
 
@@ -344,6 +348,9 @@ func runSession(md *session.MD, autoAV, usbPace bool) {
 		vw, vh := md.VideoSize()
 		ox, oy, cw, ch := md.VideoPad()
 		inW, inH := md.TouchSize()
+		if onReady != nil {
+			onReady()
+		}
 		log.Printf("session ready (SDR received) video=%d audio=%d input=%d sensor=%d size=%dx%d ui=%dx%d pad=%d,%d touch=%dx%d",
 			md.VideoCh, md.AudioCh, md.InputCh, md.SensorCh, vw, vh, cw, ch, ox, oy, inW, inH)
 		if !autoAV {

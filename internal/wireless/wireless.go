@@ -711,7 +711,10 @@ waitLoop:
 	// Connected is not working: the car still has to speak (TLS client hello,
 	// then the version request). Say so instead of a bare endpoint.
 	st.Setf("Car TCP", true, "connected to %s, waiting for the car", endpoint)
-	st.Set("Android Auto session", true, "TCP connected")
+	// Deliberately not green: TCP being accepted says nothing about the session.
+	// The unit stayed mute on many bench runs while this said "connected", and the
+	// page then told the user he could drive.
+	st.Set("Android Auto session", false, "TCP connected, the car has not started the session yet")
 	st.Phase("session")
 	opt.logf("tcp: connected to %s in %s", endpoint, sinceText(t))
 	st.Step("TCP connected to %s", endpoint)
