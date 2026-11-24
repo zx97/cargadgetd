@@ -107,7 +107,13 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 		wres := make(chan wppResult, 1)
 		go func(rc net.Conn) {
 			_ = rc.SetReadDeadline(time.Now().Add(2 * time.Second))
-			werr := writeWPP(rc, wppInfoRequest, nil)
+			// Same opening as the handshake: the unit answered the info request in
+			// the sessions that worked, and the version request wakes units that
+			// wait for the phone to speak first.
+			werr := writeWPP(rc, wppVersionRequest, buildVersionRequest(1, 0))
+			if werr == nil {
+				werr = writeWPP(rc, wppInfoRequest, nil)
+			}
 			answered := false
 			if werr == nil {
 				buf := make([]byte, 4)
@@ -119,11 +125,17 @@ func probeAAChannel(ctx context.Context, addr string, logf func(string, ...any))
 		}(rc)
 		var werr error
 		answered := false
+		// A channel that accepted is a real service, and the head unit may take
+		// seconds before it sends anything. Measured on Android Auto against the
+		// bench unit: the version request arrives 5.4 s after the RFCOMM connect,
+		// and Google's own budget is 12 s. A 3 s wait closed the socket just
+		// before the unit spoke: "channel 1: opened but no WPP answer within 3s",
+		// then the scan moved on to channels that were refused.
 		select {
 		case r := <-wres:
 			werr, answered = r.werr, r.answered
-		case <-time.After(3 * time.Second):
-			logf("probe: channel %d: opened but no WPP answer within 3s", ch)
+		case <-time.After(12 * time.Second):
+			logf("probe: channel %d: opened but no WPP answer within 12s", ch)
 			werr = fmt.Errorf("no WPP answer")
 		}
 		rc.Close()
