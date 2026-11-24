@@ -1,6 +1,7 @@
 package wireless
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -122,6 +123,14 @@ func connmanConnect(ssid string) error {
 // travels in the environment of the setuid helper: its command line is public,
 // its environment is root-only.
 func connmanJoin(ssid, psk string) error {
+	return connmanJoinCtx(context.Background(), ssid, psk)
+}
+
+// connmanJoinCtx is connmanJoin with a context: a join started for an attempt
+// that is already over must die with it, or it switches the interface to an old
+// AP in the middle of a live session (which reads as "the head unit went
+// silent").
+func connmanJoinCtx(ctx context.Context, ssid, psk string) error {
 	if psk == "" {
 		return connmanConnect(ssid)
 	}
@@ -129,7 +138,7 @@ func connmanJoin(ssid, psk string) error {
 	if bin == "" {
 		return connmanConnect(ssid)
 	}
-	cmd := exec.Command(bin, "-wifi-join", ssid)
+	cmd := exec.CommandContext(ctx, bin, "-wifi-join", ssid)
 	cmd.Env = append(os.Environ(), "CARGADGETD_WIFI_PSK="+psk)
 	out, err := cmd.CombinedOutput()
 	msg := strings.TrimSpace(string(out))

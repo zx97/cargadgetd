@@ -390,6 +390,8 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 	// of both, parallel ones the maximum.
 	var joinOnce sync.Once
 	var joinErr atomic.Value // stores the error string, for the log
+	joinCtx, cancelJoins := context.WithCancel(ctx)
+	defer cancelJoins()
 	startJoin := func(wantSSID, wantKey string) {
 		if wantSSID == "" {
 			return
@@ -397,7 +399,7 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		joinOnce.Do(func() {
 			go func() {
 				t := time.Now()
-				if err := connmanJoin(wantSSID, wantKey); err != nil {
+				if err := connmanJoinCtx(joinCtx, wantSSID, wantKey); err != nil {
 					joinErr.Store(err.Error())
 					opt.logf("wifi: parallel join %q failed after %s: %v", wantSSID, sinceText(t), err)
 					return
@@ -415,7 +417,19 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		lastRx time.Time
 	)
 	defer func() {
-		rc.Close()
+		// Keep the WPP channel open a little after the endpoint is known: the
+		// unit seems to follow the wireless session through it, and closing it
+		// right after the TCP dial (before TLS even starts) leaves the unit on
+		// its pairing screen. On the session that worked the gap was 52ms, so
+		// nobody noticed; with an automatic join it is seconds.
+		if err == nil {
+			go func(c net.Conn) {
+				time.Sleep(10 * time.Second)
+				_ = c.Close()
+			}(rc)
+		} else {
+			_ = rc.Close()
+		}
 		age := "never"
 		if !lastRx.IsZero() {
 			age = sinceText(lastRx)
@@ -432,7 +446,22 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 
 	send := func(id uint16, payload []byte, what string) error {
 		t := time.Now()
-		err := writeWPP(rc, id, payload)
+		// Deadlines are not honoured on this RFCOMM fd (it is a plain blocking
+		// socket to the Go runtime), and a head unit that went back to FM leaves
+		// the socket writable-looking while nobody reads: the write then blocks
+		// for ever and the whole daemon freezes in phase "wpp" with no log line.
+		type wres struct{ err error }
+		done := make(chan wres, 1)
+		go func() {
+			done <- wres{writeWPP(rc, id, payload)}
+		}()
+		var err error
+		select {
+		case r := <-done:
+			err = r.err
+		case <-time.After(3 * time.Second):
+			err = fmt.Errorf("write blocked for 3s")
+		}
 		if err != nil {
 			opt.logf("wpp tx: id=%d %s len=%d FAILED after %s: %v", id, what, len(payload), sinceText(t), err)
 			return err
