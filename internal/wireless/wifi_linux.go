@@ -52,6 +52,35 @@ func logWiFi(iface string, logf func(string, ...any)) {
 	logf("wifi: %s current ssid=%q ip=%q", iface, wifiSSID(iface), wifiIPv4(iface))
 }
 
+// defaultGateway returns the IPv4 gateway of iface, or "".
+//
+// A head unit hands out its own address as the default route of the access
+// point it just made us join, and the Android Auto endpoint is that address on
+// port 6730. Android Auto does not read it from the start request: its own log
+// says "Launch projection 192.168.43.1 6730" as a constant. Reading the route is
+// the portable way to find the same address when a unit never sends id=1.
+func defaultGateway(iface string) string {
+	if iface == "" {
+		return ""
+	}
+	out, err := exec.Command("/usr/sbin/ip", "-4", "route", "show", "dev", iface).Output()
+	if err != nil {
+		out, err = exec.Command("/sbin/ip", "-4", "route", "show", "dev", iface).Output()
+		if err != nil {
+			return ""
+		}
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		if len(f) >= 3 && f[0] == "default" && f[1] == "via" {
+			if ip := net.ParseIP(f[2]); ip != nil && ip.To4() != nil {
+				return f[2]
+			}
+		}
+	}
+	return ""
+}
+
 // waitWifi blocks until iface is associated with want and has an IPv4 address.
 // psk comes from the WPP handshake: with it the AP is provisioned on the spot,
 // which is what a head unit whose SSID changes between sessions needs.

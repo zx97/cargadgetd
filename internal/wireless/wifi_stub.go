@@ -13,3 +13,5 @@ func waitWifi(context.Context, string, string, time.Duration, func(string, ...an
 }
 
 func logWiFi(string, func(string, ...any)) {}
+
+func defaultGateway(string) string { return "" }

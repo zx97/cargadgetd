@@ -488,6 +488,7 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		ssid, key, bssid string
 		security         uint64
 		retries          int
+		ssidSeen         time.Time
 	)
 	// A raw RFCOMM socket opened with os.NewFile may stay a blocking file whose
 	// SetReadDeadline does nothing; a reader goroutine plus explicit timers keeps
@@ -502,6 +503,21 @@ waitLoop:
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("wpp: handshake timeout after %s (endpoint=%q ssid=%q rx=%d)",
 				sinceText(start), endpoint, ssid, rx)
+		}
+		// The endpoint is not something to wait for: Android Auto targets
+		// 192.168.43.1:6730 as a constant (its own log reads "Launch projection
+		// 192.168.43.1 6730"), and a head unit that expects the phone to start
+		// never sends id=1 at all. Once the SSID is known, leave the loop after a
+		// short grace period so the join and the TCP dial can happen; the endpoint
+		// falls back to the access point gateway just below.
+		if ssid != "" {
+			if ssidSeen.IsZero() {
+				ssidSeen = time.Now()
+			}
+			if endpoint != "" || time.Since(ssidSeen) > 3*time.Second {
+				opt.logf("wpp: leaving the RFCOMM loop after %s (endpoint=%q ssid=%q)", sinceText(start), endpoint, ssid)
+				break waitLoop
+			}
 		}
 		t := time.Now()
 		wait := 5 * time.Second
@@ -600,10 +616,6 @@ waitLoop:
 			default:
 				opt.logf("wpp: unhandled packet id=%d len=%d (hex=%s)", pkt.ID, len(pkt.Payload), hexPreview(pkt.Payload))
 			}
-			if endpoint != "" && ssid != "" {
-				opt.logf("wpp: endpoint and SSID known after %s, leaving the RFCOMM loop", sinceText(start))
-				break waitLoop
-			}
 		case <-time.After(wait):
 			// The head unit's wireless window is short (its AP and its RFCOMM
 			// service disappear within a minute), so ask again quickly instead of
@@ -629,6 +641,12 @@ waitLoop:
 
 	st.Set("WPP handshake", true, endpoint)
 	st.Phase("wifi")
+	if endpoint == "" {
+		// The gateway can only be read once the interface is on the car's access
+		// point; reading it here would return the home router. Resolved after the
+		// join, just below.
+		opt.logf("wpp: no start request carried an endpoint, will use the access point gateway once joined")
+	}
 	want := ssid
 	if want == "" {
 		want = guess
@@ -653,6 +671,16 @@ waitLoop:
 	if err := waitWifi(ctx, opt.Interface, want, key, wantPrefix, opt.WiFiTimeout, opt.logf, st); err != nil {
 		st.Set("Car Wi-Fi", false, err.Error())
 		return nil, err
+	}
+	if endpoint == "" {
+		gw := defaultGateway(opt.Interface)
+		if gw == "" {
+			gw = "192.168.43.1"
+		}
+		endpoint = net.JoinHostPort(gw, "6730")
+		opt.logf("wpp: no start request carried an endpoint, using the access point gateway %s", endpoint)
+		st.Set("Endpoint", true, endpoint)
+		st.Step("Car endpoint (default): %s", endpoint)
 	}
 	if err := send(wppConnectStatus, buildConnectStatus(wppStatusSuccess), "connect status SUCCESS"); err != nil {
 		return nil, err
