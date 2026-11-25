@@ -417,11 +417,13 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		// its pairing screen. On the session that worked the gap was 52ms, so
 		// nobody noticed; with an automatic join it is seconds.
 		if err == nil {
-			// CARGADGETD_WPP_HOLD_MS tunes how long the WPP channel stays open
-			// after the handshake (default 10s). Set it to 0 to close immediately
-			// before the TCP dial, which is what some units seem to need before
-			// they start the AA session.
-			hold := 10 * time.Second
+			// Close the WPP channel as soon as the handshake is over. Measured on
+			// the bench: keeping it open for 10s made the head unit accept the TCP
+			// connection and stay completely mute (no AA version request, no TLS
+			// ClientHello) until we gave up. With 0 the same unit sent the version
+			// request 356ms after the dial and completed the TLS handshake - the
+			// 10s hold was the deadlock. CARGADGETD_WPP_HOLD_MS still overrides it.
+			hold := time.Duration(0)
 			if v := os.Getenv("CARGADGETD_WPP_HOLD_MS"); v != "" {
 				if ms, perr := strconv.Atoi(v); perr == nil && ms >= 0 {
 					hold = time.Duration(ms) * time.Millisecond
