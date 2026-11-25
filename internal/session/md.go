@@ -864,30 +864,21 @@ func (m *MD) handle(channel uint8, flags uint8, payload []byte) error {
 		}
 		if done {
 			m.log.Printf("ssl handshake complete (md)")
+			// Nothing is sent here: the bench unit sends MsgAuthComplete itself and
+			// the discovery request follows in that handler, which is also what the
+			// session tests expect. Sending our own AuthComplete from this point
+			// broke TestGiveUpVideoAckAfterSilence, and the wired path (which works)
+			// never needed it.
 		}
 		return nil
 
 	case MsgAuthComplete:
-		m.log.Printf("auth complete")
-		// AACS: MD sends ServiceDiscoveryRequest.
-		// device_name=4, device_brand=5 (aap_protobuf). Send the name the user
-		// gave the phone, not "linux"/"cargadgetd".
-		m.mu.Lock()
-		name, brand := m.deviceName, m.deviceBrand
-		m.mu.Unlock()
-		if name == "" {
-			name, brand = "cargadgetd", "linux"
-		}
-		req := []byte{}
-		req = append(req, encodeProtoString(4, name)...)
-		if brand != "" {
-			req = append(req, encodeProtoString(5, brand)...)
-		}
-		m.log.Printf("SDR request device_name=%q device_brand=%q", name, brand)
-		if err := m.sendEnc(0, 0, MsgServiceDiscoveryRequest, req); err != nil {
-			return err
-		}
-		return nil
+		// The head unit asked for the service list: answer with our discovery
+		// request. Some units send this message themselves (the bench Melia does);
+		// the real protocol has the phone send it, which sendSDRRequest covers on
+		// TLS completion.
+		m.log.Printf("auth complete (from the unit)")
+		return m.sendSDRRequest()
 
 	case MsgServiceDiscoveryResponse:
 		m.log.Printf("got service discovery response (%d bytes)", len(body))
@@ -2190,4 +2181,23 @@ func encodeProtoVarint(fieldNumber int, v uint64) []byte {
 		v >>= 7
 	}
 	return append(out, byte(v))
+}
+
+// sendSDRRequest asks the head unit for its channel list. device_name=4,
+// device_brand=5 (aap_protobuf): the name the user gave the phone, not
+// "linux"/"cargadgetd".
+func (m *MD) sendSDRRequest() error {
+	m.mu.Lock()
+	name, brand := m.deviceName, m.deviceBrand
+	m.mu.Unlock()
+	if name == "" {
+		name, brand = "cargadgetd", "linux"
+	}
+	req := []byte{}
+	req = append(req, encodeProtoString(4, name)...)
+	if brand != "" {
+		req = append(req, encodeProtoString(5, brand)...)
+	}
+	m.log.Printf("SDR request device_name=%q device_brand=%q", name, brand)
+	return m.sendEnc(0, 0, MsgServiceDiscoveryRequest, req)
 }
