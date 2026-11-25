@@ -152,6 +152,27 @@ func (r *Renderer) ForceIDR() {
 	r.forceIDR = true
 }
 
+// RequestIDR asks for a keyframe on the next Encode without reopening the
+// encoder when the codec allows it (hardware Codec2 does, via the input sync
+// flag; software x264 keeps its own GOP).
+//
+// A stream that carries a single IDR at its start leaves a hardware decoder
+// that lost its reference — one dropped frame, one resync — waiting for ever:
+// the picture freezes and the head unit stops consuming the channel. The
+// official phone sends a keyframe every couple of seconds.
+func (r *Renderer) RequestIDR() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.enc == nil {
+		return
+	}
+	if ir, ok := r.enc.(interface{ IDR() }); ok {
+		ir.IDR()
+		return
+	}
+	r.forceIDR = true
+}
+
 // Encode paints now, when a painter is set, and returns one Annex-B AU.
 // A nil painter leaves the RGBA buffer as it is (black until something paints).
 // Only call when the AU will be sent — encoding without send desyncs the HU.

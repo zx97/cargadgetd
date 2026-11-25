@@ -16,13 +16,17 @@ type x264Enc struct {
 func newX264(w, h, fps int) (codec, error) {
 	e := &x264Enc{}
 	enc, err := x264.NewEncoder(&e.buf, &x264.Options{
-		Width:        w,
-		Height:       h,
-		FrameRate:    fps,
-		Tune:         "zerolatency",
-		Preset:       "ultrafast",
-		Profile:      "baseline",
-		KeyInt:       fps * 3600,
+		Width:     w,
+		Height:    h,
+		FrameRate: fps,
+		Tune:      "zerolatency",
+		Preset:    "ultrafast",
+		Profile:   "baseline",
+		// A four-second GOP. x264-go has no "keyframe now" call, so this is the
+		// software codec's only bound on how long a decoder that lost its
+		// reference stays frozen; the hardware path asks for one directly
+		// (Renderer.RequestIDR → the input sync flag).
+		KeyInt:       fps * 4,
 		IntraRefresh: false,
 		RateControl:  "cqp",
 		RateConstant: 18, // larger loop P (~300–500B); tiny 94B+PCM died ~20s on Xperia
@@ -37,6 +41,10 @@ func newX264(w, h, fps int) (codec, error) {
 }
 
 func (e *x264Enc) Name() string { return "x264-sw" }
+
+// IDR is a no-op: x264 honours its own GOP (fps*2), and forcing a keyframe here
+// would reopen the encoder for every request.
+func (e *x264Enc) IDR() {}
 
 func (e *x264Enc) Encode(img *image.RGBA) ([]byte, error) {
 	e.buf.Reset()

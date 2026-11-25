@@ -145,6 +145,14 @@ type MD struct {
 	// usbBulk: FunctionFS transport — larger TLS-safe chunks + inter-fragment pause.
 	usbBulk bool
 
+	// pingNanos is how often the phone emits its own PingRequests (0 = never).
+	// The official Android Auto pings on wireless links only, about once a
+	// second, and the answer carries the round trip; a head unit that expects
+	// that keep-alive is what this is for. See EnablePings.
+	pingNanos atomic.Int64
+	pingRTT   atomic.Int64 // last round trip, ns
+	pingRTTN  atomic.Int64 // answered pings so far
+
 	// ackMu/ackTimes hold the recent MediaAck instants: the rate tells a head
 	// unit that acks every frame from one that batches its acks.
 	ackMu      sync.Mutex
@@ -258,9 +266,56 @@ func (m *MD) SetDeviceInfo(name, brand string) {
 func (m *MD) Run() error {
 	go m.writer()
 	go m.watchSilence()
+	go m.pingLoop()
 	err := m.reader()
 	m.doneOnce.Do(func() { close(m.done) }) // stop writer — one leaked per session otherwise
 	return err
+}
+
+// EnablePings makes the phone send its own PingRequests at the given period;
+// zero (the default) keeps it silent and only answering the head unit's pings.
+//
+// The official Android Auto does this on wireless links and not on USB, once a
+// second. The reply is a PingResponse carrying the sent timestamp, which yields
+// the round trip. Worth having on a link where the car may treat a phone that
+// never pings as gone — that is the difference between our MD and the real one
+// that this daemon otherwise reproduces byte for byte.
+func (m *MD) EnablePings(every time.Duration) {
+	if every < 0 {
+		every = 0
+	}
+	m.pingNanos.Store(int64(every))
+}
+
+// pingLoop emits PingRequests while EnablePings asked for them. It wakes four
+// times a second so a period set mid-session takes effect without a restart.
+func (m *MD) pingLoop() {
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	var last time.Time
+	for {
+		select {
+		case <-m.done:
+			return
+		case <-tick.C:
+		}
+		every := time.Duration(m.pingNanos.Load())
+		if every <= 0 {
+			continue
+		}
+		if !last.IsZero() && time.Since(last) < every {
+			continue
+		}
+		last = time.Now()
+		// Control.PingRequest: field 1 = timestamp (int64). The official phone
+		// sends its monotonic clock in nanoseconds and bug_report explicitly
+		// false, which protobuf leaves out as the default; the car only echoes
+		// the timestamp back.
+		body := appendVarint([]byte{0x08}, uint64(last.UnixNano()))
+		p := frame.PutU16(nil, MsgPingRequest)
+		p = append(p, body...)
+		m.enqueueAsync(0, frame.FlagBulk|frame.FlagEncrypted, p)
+	}
 }
 
 // SilentHU is how long the car may stay completely silent before the session is
@@ -661,6 +716,17 @@ func (m *MD) fail(err error) {
 }
 
 // enqueue writes via the writer goroutine so the reader never blocks on net.Pipe.
+// Abort ends the session with err. Used by the link watchdog: once the phone
+// has left the head unit's access point, its projection is gone whatever the
+// TCP socket still holds, and waiting for the silence timeout only delays the
+// return to the home network (and leaves the car with a half-open connection).
+func (m *MD) Abort(err error) {
+	if err == nil {
+		err = ErrHeadUnitSilent
+	}
+	m.fail(err)
+}
+
 // failure returns the reason the session was failed, if any.
 func (m *MD) failure() error {
 	m.failMu.Lock()
@@ -806,8 +872,12 @@ func (m *MD) reader() error {
 		// dialogue has to be readable from the journal alone, since the session is
 		// TLS-encrypted and only our side can decrypt it.
 		if len(payload) >= 2 {
-			m.log.Printf("rx ch=%d flags=%#x msg=0x%04x len=%d",
-				f.Channel, flags, binary.BigEndian.Uint16(payload[:2]), len(payload))
+			head := payload
+			if len(head) > 48 {
+				head = head[:48]
+			}
+			m.log.Printf("rx ch=%d flags=%#x msg=0x%04x len=%d hex=%x",
+				f.Channel, flags, binary.BigEndian.Uint16(payload[:2]), len(payload), head)
 		}
 		if err := m.handle(f.Channel, flags, payload); err != nil {
 			mt := uint16(0)
@@ -922,6 +992,24 @@ func (m *MD) handle(channel uint8, flags uint8, payload []byte) error {
 		p = append(p, body...)
 		m.log.Printf("ping_rx → pong_async body=%d", len(body))
 		m.enqueueAsync(0, frame.FlagBulk|frame.FlagEncrypted, p)
+		return nil
+
+	case MsgPingResponse:
+		// Answer to a PingRequest we sent (see EnablePings): the payload is the
+		// timestamp we put in it, so the difference is the round trip.
+		if len(body) >= 2 {
+			ts, _ := readVarint(body[1:])
+			if sent := int64(ts); sent > 0 {
+				rtt := time.Since(time.Unix(0, sent))
+				if rtt > 0 && rtt < time.Minute {
+					m.pingRTT.Store(int64(rtt))
+					m.pingRTTN.Add(1)
+				}
+				if n := m.pingRTTN.Load(); n <= 3 || n%60 == 0 {
+					m.log.Printf("ping rtt %v (n=%d)", rtt.Round(time.Millisecond), n)
+				}
+			}
+		}
 		return nil
 
 	case MsgAudioFocusResponse:

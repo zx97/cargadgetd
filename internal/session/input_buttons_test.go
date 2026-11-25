@@ -16,13 +16,30 @@ func TestHandshakeButtonsAcceptsEverything(t *testing.T) {
 	}
 }
 
-func TestHandshakeButtonsKeepsHUExtras(t *testing.T) {
-	got := handshakeButtons([]int{1, 4, 3, 200})
-	if !containsInt(got, 200) {
-		t.Fatalf("lost HU extra: %v", got)
+func TestHandshakeButtonsBindsOnlyTheAdvertisedKeys(t *testing.T) {
+	// The Melia answers any unadvertised code with STATUS_KEYCODE_NOT_BOUND
+	// (-18) and refuses the whole binding, so the set must be the SDR list.
+	got := handshakeButtons([]int{7, 8, 3, 200, 3})
+	want := []int{7, 8, 3, 200}
+	if len(got) != len(want) {
+		t.Fatalf("want %v, got %v", want, got)
 	}
-	if !containsInt(got, 87) {
-		t.Fatalf("full set still required: %v", got)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("want %v, got %v", want, got)
+		}
+	}
+	if containsInt(got, 87) {
+		t.Fatalf("bound a key the head unit never listed: %v", got)
+	}
+}
+
+func TestHandshakeButtonsFallsBackToKnownWhenNoneAdvertised(t *testing.T) {
+	got := handshakeButtons([]int{0, -1})
+	for _, h := range huInputs {
+		if !containsInt(got, h.Code) {
+			t.Fatalf("missing %d %s in %v", h.Code, h.Name, got)
+		}
 	}
 }
 

@@ -30,6 +30,8 @@ type Peer struct {
 	SkipVideoAck atomic.Bool
 	// byeByeResp counts the ByeByeResponse frames the phone sent back.
 	byeByeResp atomic.Int32
+	// phonePings counts the PingRequests the phone sent (see MD.EnablePings).
+	phonePings atomic.Int32
 
 	mu    sync.Mutex
 	sendQ chan peerOut
@@ -64,6 +66,9 @@ func (p *Peer) BluetoothPairing() (requests int, address string, methods []uint3
 	defer p.mu.Unlock()
 	return p.btRequests, p.btAddress, append([]uint32(nil), p.btMethods...)
 }
+
+// PhonePings returns how many PingRequest messages the phone sent.
+func (p *Peer) PhonePings() int { return int(p.phonePings.Load()) }
 
 // parseBTRequest reads BluetoothPairingRequest: phone_address=1 (string),
 // pairing_method=2 (varint enum).
@@ -248,6 +253,16 @@ func (p *Peer) Run() error {
 			msg := frame.PutU16(nil, session.MsgServiceDiscoveryResponse)
 			msg = append(msg, sdr...)
 			if err := p.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, msg); err != nil {
+				return err
+			}
+
+		case session.MsgPingRequest:
+			// The phone pings on wireless links; answer like a head unit does,
+			// echoing the timestamp it sent.
+			p.phonePings.Add(1)
+			resp := frame.PutU16(nil, session.MsgPingResponse)
+			resp = append(resp, body...)
+			if err := p.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, resp); err != nil {
 				return err
 			}
 

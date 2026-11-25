@@ -20,7 +20,62 @@ func certDir(t *testing.T) string {
 	return testpem.Dir(t)
 }
 
+func TestPhonePingsLikeAWirelessLink(t *testing.T) {
+	dir := certDir(t)
+	mdSSL, err := aassl.NewServer(filepath.Join(dir, "android_auto.crt"), filepath.Join(dir, "android_auto.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mdSSL.Close()
+	huSSL, err := aassl.NewClient(filepath.Join(dir, "headunit.crt"), filepath.Join(dir, "headunit.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer huSSL.Close()
+
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+
+	md := session.NewMD(a, mdSSL, log.New(io.Discard, "", 0))
+	hu := hupeer.New(b, huSSL, log.New(io.Discard, "", 0))
+	errMD := make(chan error, 1)
+	go func() { errMD <- md.Run() }()
+	go func() { _ = hu.Run() }()
+
+	select {
+	case <-md.WaitReady():
+	case err := <-errMD:
+		t.Fatalf("md failed before ready: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for SDR")
+	}
+
+	// USB stays silent and only answers; a wireless link pings every second.
+	time.Sleep(1200 * time.Millisecond)
+	if n := hu.PhonePings(); n != 0 {
+		t.Fatalf("pinged %d times before EnablePings", n)
+	}
+	md.EnablePings(50 * time.Millisecond)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) && hu.PhonePings() < 5 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if n := hu.PhonePings(); n < 5 {
+		t.Fatalf("only %d pings in 3s, want at least 5", n)
+	}
+	// The head unit answered them: an unhandled PingResponse used to be a
+	// strict-mode session failure, so the session must still be alive.
+	select {
+	case err := <-errMD:
+		t.Fatalf("session ended on answered pings: %v", err)
+	default:
+	}
+}
+
 func TestMDHUhandshakeAVTouch(t *testing.T) {
+
 	dir := certDir(t)
 	mdCert := filepath.Join(dir, "android_auto.crt")
 	mdKey := filepath.Join(dir, "android_auto.key")

@@ -1,7 +1,5 @@
 package session
 
-import "sort"
-
 // huInput is a named GAL key dispatched to plugins as
 //
 //	void cargadgetd_app_<id>_huinput_<Name>(int pressed); // 1 down, 0 up
@@ -85,26 +83,30 @@ func HuInputName(code int) (string, bool) {
 	return "", false
 }
 
-// handshakeButtons is the set we advertise: every known GAL key, plus any
-// extra codes the HU listed in SDR (vendor / newer keys).
+// handshakeButtons is the set we bind: exactly the keycodes the head unit listed
+// in its service discovery, when it listed any.
+//
+// Claiming more than that is refused. The Melia bench answers the whole binding
+// with STATUS_KEYCODE_NOT_BOUND (-18, `800308eeffffffffffffffff01`) as soon as
+// one requested code is unknown to it, and the real phone only ever binds the
+// advertised list — so a "every key we know" list costs the touch/keys channel
+// outright. The known list stays as the fallback for a unit that lists none.
 func handshakeButtons(hu []int) []int {
-	known := huInputCodes()
-	seen := make(map[int]bool, len(known)+len(hu))
-	var out []int
-	add := func(c int) {
+	if len(hu) == 0 {
+		return huInputCodes()
+	}
+	seen := make(map[int]bool, len(hu))
+	out := make([]int, 0, len(hu))
+	for _, c := range hu {
 		if c <= 0 || seen[c] {
-			return
+			continue
 		}
 		seen[c] = true
 		out = append(out, c)
 	}
-	for _, c := range known {
-		add(c)
+	if len(out) == 0 {
+		return huInputCodes()
 	}
-	for _, c := range hu {
-		add(c)
-	}
-	sort.Ints(out)
 	return out
 }
 

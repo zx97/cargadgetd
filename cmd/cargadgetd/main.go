@@ -164,6 +164,18 @@ func main() {
 		defer ssl.Close()
 		md := session.NewMD(rw, ssl, log.Default())
 		md.SetUSBBulk(usbBulk)
+		if !usbBulk {
+			// The official phone pings once a second on wireless links and only
+			// answers the head unit's on USB; reproduce that, and log wlan0 for
+			// the duration of the session so a dead link is distinguishable
+			// from a mute head unit.
+			md.EnablePings(time.Second)
+			linkCtx, linkStop := context.WithCancel(context.Background())
+			defer linkStop()
+			go wireless.WatchLink(linkCtx, *wirelessIface, log.Printf, func() {
+				md.Abort(fmt.Errorf("%w (the phone left the head unit's access point)", session.ErrHeadUnitSilent))
+			})
+		}
 		md.SetLocalBluetooth(btAddr, btName)
 		// Same vendor/model split as the USB descriptors, so the head unit
 		// shows "<vendor> <model>" for the Bluetooth entry, the USB entry and
@@ -629,6 +641,10 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 		nextFrame := time.Now()
 		var bypassN, skipN uint64
 		var lastIDR time.Time
+		// keyframeInterval keeps an IDR flowing even when nothing goes wrong: a
+		// stream whose only keyframe is the first one never recovers a decoder
+		// that lost its reference, and the head unit then stalls for good.
+		const keyframeInterval = 2 * time.Second
 		var pcmCoolUntil atomic.Int64 // unix nano; 0 = not cooling
 		var pcmCoolN atomic.Uint64
 		onAudioAckStall := func(reason string) {
@@ -753,6 +769,10 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 					nextFrame = nextFrame.Add(framePeriod)
 					continue
 				}
+			}
+			if time.Since(lastIDR) >= keyframeInterval {
+				lastIDR = time.Now()
+				live.RequestIDR()
 			}
 			au, err := live.Encode(now)
 			if err != nil {

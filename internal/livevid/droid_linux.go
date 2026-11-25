@@ -503,6 +503,9 @@ type droidEnc struct {
 	nalLen int
 	seq    int64
 	first  uint32
+	// idr requests a keyframe on the next push (see IDR): the sync flag on the
+	// encoder's input buffer, which Codec2 honours without a reopen.
+	idr atomic.Bool
 }
 
 var droidTab sync.Map // codec pointer → *droidEnc
@@ -598,6 +601,12 @@ func pickDroidColor(fmts []C.uint32_t) (color int, layout int) {
 
 func (e *droidEnc) Name() string { return "droidmedia-hw" }
 
+// IDR asks for a keyframe on the next encoded frame by marking that input buffer
+// as a sync frame. Much cheaper than Renderer.ForceIDR, which tears the codec
+// down and rebuilds it: periodic keyframes are normal traffic, reopens are a
+// recovery measure.
+func (e *droidEnc) IDR() { e.idr.Store(true) }
+
 func (e *droidEnc) acquire() (int, error) {
 	deadline := time.Now().Add(400 * time.Millisecond)
 	for {
@@ -640,7 +649,7 @@ func (e *droidEnc) Encode(img *image.RGBA) ([]byte, error) {
 	ts := e.seq * 33333
 	e.mu.Unlock()
 	sync := 0
-	if atomic.CompareAndSwapUint32(&e.first, 0, 1) {
+	if atomic.CompareAndSwapUint32(&e.first, 0, 1) || e.idr.CompareAndSwap(true, false) {
 		sync = 1
 	}
 	var out C.droid_au_out
