@@ -127,6 +127,13 @@ type MD struct {
 	inputButtons []int
 	sensorTypes  []int
 
+	// serviceIDs is every service the head unit listed in its discovery
+	// response, in order; openedCh the ones we opened. Some head units hold
+	// their streams back until every listed channel is open (AARE names this
+	// behaviour explicitly), and the Melia lists nine while we speak five.
+	serviceIDs []uint8
+	openedCh   map[uint8]bool
+
 	Events   chan Event
 	ready    chan struct{}
 	done     chan struct{} // closed when the session ends; stops the writer
@@ -1383,6 +1390,9 @@ func (m *MD) parseSDR(body []byte) {
 		if id == 0 {
 			continue
 		}
+		m.mu.Lock()
+		m.serviceIDs = append(m.serviceIDs, uint8(id))
+		m.mu.Unlock()
 		switch kind {
 		case "video":
 			m.mu.Lock()
@@ -1941,7 +1951,55 @@ func (m *MD) openChannel(id uint8) error {
 	if err := m.sendEnc(id, frame.FlagSpecific, MsgChannelOpenRequest, body); err != nil {
 		return err
 	}
-	return m.await(wait, 5*time.Second, fmt.Sprintf("channel %d open", id))
+	if err := m.await(wait, 5*time.Second, fmt.Sprintf("channel %d open", id)); err != nil {
+		return err
+	}
+	m.markOpened(id)
+	return nil
+}
+
+// markOpened records a channel as open (safe before any open is attempted).
+func (m *MD) markOpened(id uint8) {
+	m.mu.Lock()
+	if m.openedCh == nil {
+		m.openedCh = make(map[uint8]bool, 8)
+	}
+	m.openedCh[id] = true
+	m.mu.Unlock()
+}
+
+// OpenEveryListedChannel opens every service the head unit listed and we have
+// not, without waiting for the response and without speaking its protocol.
+//
+// Some head units hold their streams back until every channel they listed is
+// open — AARE says so in as many words ("some head units hold back the streams
+// until every channel they listed is open: say which ones AARE leaves closed,
+// so a car that shows nothing can be read from the connection log"). The Melia
+// lists nine services: video, input, microphone, three audio sinks, sensors,
+// Bluetooth and phone status. We speak five of them, so four were left closed
+// while the picture ran: a unit waiting on them stops the projection once its
+// patience runs out, which is exactly the shape of the failure measured at
+// 25 s.
+func (m *MD) OpenEveryListedChannel() {
+	m.mu.Lock()
+	ids := append([]uint8(nil), m.serviceIDs...)
+	opened := make(map[uint8]bool, len(m.openedCh))
+	for id := range m.openedCh {
+		opened[id] = true
+	}
+	m.mu.Unlock()
+	for _, id := range ids {
+		if id == 0 || opened[id] {
+			continue
+		}
+		body := []byte{0x08, 0x00, 0x10, byte(id)}
+		if err := m.sendEnc(id, frame.FlagSpecific, MsgChannelOpenRequest, body); err != nil {
+			m.log.Printf("passive open ch=%d: %v", id, err)
+			continue
+		}
+		m.markOpened(id)
+		m.log.Printf("passive open ch=%d (listed by the unit and not spoken by us)", id)
+	}
 }
 
 // SendH264 sends one video NALu/bitstream chunk (USB credit via SendH264Credit).

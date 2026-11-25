@@ -380,6 +380,11 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 				log.Printf("open sensor: %v", err)
 			}
 		}
+		// Everything else the unit listed. Some head units hold their streams
+		// back until every channel is open; the Melia lists nine services and
+		// we speak five, so this covers the microphone, the extra audio sinks
+		// and the phone status channel it also announced.
+		md.OpenEveryListedChannel()
 		select {
 		case <-md.WaitVideoStarted():
 			log.Printf("video started")
