@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -416,8 +417,19 @@ func handshake(ctx context.Context, rc net.Conn, opt Options, st *Status, guess 
 		// its pairing screen. On the session that worked the gap was 52ms, so
 		// nobody noticed; with an automatic join it is seconds.
 		if err == nil {
+			// CARGADGETD_WPP_HOLD_MS tunes how long the WPP channel stays open
+			// after the handshake (default 10s). Set it to 0 to close immediately
+			// before the TCP dial, which is what some units seem to need before
+			// they start the AA session.
+			hold := 10 * time.Second
+			if v := os.Getenv("CARGADGETD_WPP_HOLD_MS"); v != "" {
+				if ms, perr := strconv.Atoi(v); perr == nil && ms >= 0 {
+					hold = time.Duration(ms) * time.Millisecond
+				}
+			}
+			opt.logf("wpp: keeping the WPP channel %s", hold)
 			go func(c net.Conn) {
-				time.Sleep(10 * time.Second)
+				time.Sleep(hold)
 				_ = c.Close()
 			}(rc)
 		} else {
