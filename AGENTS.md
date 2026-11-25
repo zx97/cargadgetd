@@ -15,6 +15,24 @@ instructions in `~/.config/opencode/AGENTS.md`.
 
 ## Hard-won facts
 
+- **The head unit validates the phone's MD certificate.** A rejected certificate makes
+  the unit answer `MsgAuthComplete` (id 4) with a protobuf status of **-3**
+  (`hex=000408fdffffffffffffffff01`) and then ignore the service discovery request
+  for ever: the TCP connection stays open, TLS completes, and the session simply
+  never starts. Our old `reversegearhead` pair expired on **2026-10-28**, which is
+  exactly when the wireless runs stopped working while the wired VW kept working
+  (it does not validate).
+  With a valid pair (`carservice` issued by `Google Automotive Link`, valid to
+  2027-03-04) the same unit answers `hex=00040800` (status 0), sends the service
+  discovery response and the session opens at 1280x720.
+  Current pairs: https://github.com/iscle/android-auto-certificates
+  (`android-auto/latest`: certificate.pem + private-key.pem for AA 18.1.664444).
+  The plugin is rebuilt from those PEMs by `captures/sunny-root/certplugin`
+  (exports `reversegearhead_android_auto_crt/_key/_ca_crt`, `_probe`,
+  `_expires_in`) and pointed at with `-certs`, so no root is needed.
+  AA 18's own APK ships no usable private key: do not go looking for one in the
+  APK or in GMS, it is not there.
+
 - **The bench head unit (Melia 4.0, `CAR BT_603F`, `41:00:00:00:9E:F0`) works.**
   A OnePlus Nord 2 connects to it wirelessly, fast and reliably. Any failure is on
   the phone side or in our code — never blame the unit.
