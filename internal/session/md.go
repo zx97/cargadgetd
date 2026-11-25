@@ -802,6 +802,13 @@ func (m *MD) reader() error {
 			pendingTotal = 0
 		}
 
+		// Log every received frame with its type and size: the bench unit's
+		// dialogue has to be readable from the journal alone, since the session is
+		// TLS-encrypted and only our side can decrypt it.
+		if len(payload) >= 2 {
+			m.log.Printf("rx ch=%d flags=%#x msg=0x%04x len=%d",
+				f.Channel, flags, binary.BigEndian.Uint16(payload[:2]), len(payload))
+		}
 		if err := m.handle(f.Channel, flags, payload); err != nil {
 			mt := uint16(0)
 			if len(payload) >= 2 {
