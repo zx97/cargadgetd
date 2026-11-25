@@ -138,6 +138,21 @@ func connmanJoinCtx(ctx context.Context, ssid, psk string) error {
 	if bin == "" {
 		return connmanConnect(ssid)
 	}
+	// CARGADGETD_WIFI_DRIVER=wpa associates through wpa_supplicant and takes the
+	// lease with udhcpc, leaving no ConnMan Connect in flight. ConnMan completes
+	// that call ~34 s later and re-applies the service, which deauthenticates
+	// the station mid-session (bench, 2026-11-25 02:08). Kept as a switch so
+	// the two drivers can be compared on the same unit without a rebuild.
+	if strings.EqualFold(os.Getenv("CARGADGETD_WIFI_DRIVER"), "wpa") {
+		cmd := exec.CommandContext(ctx, bin, "-wifi-assoc", ssid)
+		cmd.Env = append(os.Environ(), "CARGADGETD_WIFI_PSK="+psk)
+		out, err := cmd.CombinedOutput()
+		msg := strings.TrimSpace(string(out))
+		if err == nil {
+			return nil
+		}
+		return friendlyWiFiError(ssid, fmt.Errorf("wpa-assoc: %s", lastLine(msg)))
+	}
 	cmd := exec.CommandContext(ctx, bin, "-wifi-join", ssid)
 	cmd.Env = append(os.Environ(), "CARGADGETD_WIFI_PSK="+psk)
 	out, err := cmd.CombinedOutput()
@@ -150,6 +165,16 @@ func connmanJoinCtx(ctx context.Context, ssid, psk string) error {
 		return connmanConnect(ssid)
 	}
 	return friendlyWiFiError(ssid, connmanErrorFromHelper(msg))
+}
+
+// lastLine is the helper's verdict: it logs a timestamped line per step and the
+// error last.
+func lastLine(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(lines[len(lines)-1])
 }
 
 // connmanErrorFromHelper drops the log timestamp/prefix added by the helper.

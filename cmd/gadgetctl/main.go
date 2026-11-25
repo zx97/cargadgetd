@@ -44,6 +44,8 @@ func main() {
 	aoaService := flag.String("aoa-service", "", "start, stop, or restart cargadgetd-aoa.service (setuid)")
 	wifiConnect := flag.String("wifi-connect", "", "connect a saved Wi-Fi service (setuid root) and exit")
 	wifiJoin := flag.String("wifi-join", "", "connect a Wi-Fi AP, provisioning it with a passphrase if needed (setuid root) and exit")
+	wifiAssoc := flag.String("wifi-assoc", "", "associate a Wi-Fi AP through wpa_supplicant and take the lease with udhcpc, no ConnMan connect (setuid root) and exit")
+	wifiIface := flag.String("wifi-iface", "wlan0", "interface used by -wifi-assoc")
 	wifiPSK := flag.String("wifi-psk", "", "passphrase used by -wifi-join")
 	btAdapter := flag.String("bt-adapter", "", "power and expose a BlueZ adapter, e.g. /org/bluez/hci1 (setuid root) and exit")
 	btPair := flag.String("bt-pair", "", "pair a head unit by Bluetooth address or name, answering its PIN (setuid root) and exit")
@@ -94,6 +96,23 @@ func main() {
 		}
 		if err := wireless.PairDevice(*btPair, *btPin, log.Printf); err != nil {
 			log.Fatalf("pairing %s: %v", *btPair, err)
+		}
+		return
+	}
+
+	if *wifiAssoc != "" {
+		if os.Geteuid() != 0 {
+			log.Fatal("gadgetctl -wifi-assoc needs root (install setuid RPM or use devel-su)")
+		}
+		if err := becomeRoot(); err != nil {
+			log.Fatalf("become root: %v", err)
+		}
+		psk := *wifiPSK
+		if psk == "" {
+			psk = os.Getenv("CARGADGETD_WIFI_PSK")
+		}
+		if err := wireless.AssociateWiFi(*wifiAssoc, psk, *wifiIface, log.Printf); err != nil {
+			log.Fatal(err)
 		}
 		return
 	}

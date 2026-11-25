@@ -16,4 +16,8 @@ func logWiFi(string, func(string, ...any)) {}
 
 func WatchLink(context.Context, string, func(string, ...any), func()) {}
 
+func AssociateWiFi(string, string, string, func(string, ...any)) error {
+	return fmt.Errorf("wireless: Wi-Fi association is only implemented on Linux")
+}
+
 func defaultGateway(string) string { return "" }
