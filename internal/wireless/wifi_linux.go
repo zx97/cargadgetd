@@ -69,21 +69,26 @@ func WatchLink(ctx context.Context, iface string, logf func(string, ...any), onL
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 	prev := ""
+	prevState := ""
 	lost := false
 	for {
 		ssid, ip := wifiSSID(iface), wifiIPv4(iface)
 		cur := fmt.Sprintf("ssid=%q ip=%q", ssid, ip)
+		state := connmanStateOf(ssid)
+		// The service state matters on its own: ConnMan moves it to "ready"
+		// when its Connect completes, and on this bench that completion is what
+		// deauthenticates the station. Logging only at link changes hid the
+		// transition itself.
+		if state != prevState {
+			logf("link: connman %q state %s → %s", ssid, orDash(prevState), orDash(state))
+			prevState = state
+		}
 		if cur != prev {
-			// ConnMan's own view, logged with the kernel's: when the two
-			// disagree, the service state machine is the actor (an agent
-			// release or a pending Connect re-applying the service), and the
-			// driver is only following.
-			state := connmanStateOf(ssid)
 			switch {
 			case prev == "":
 				logf("link: %s %s connman=%s", iface, cur, state)
 			case ssid == "" || ip == "":
-				logf("link: LOST %s %s (was %s)", iface, cur, prev)
+				logf("link: LOST %s %s connman=%s (was %s)", iface, cur, state, prev)
 				if !lost && onLost != nil {
 					lost = true
 					onLost()
@@ -99,6 +104,14 @@ func WatchLink(ctx context.Context, iface string, logf func(string, ...any), onL
 		case <-t.C:
 		}
 	}
+}
+
+// orDash renders an empty state as "-" so the log stays readable.
+func orDash(s string) string {
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 // connmanStateOf returns ConnMan's State for the service named ssid, or "-".
