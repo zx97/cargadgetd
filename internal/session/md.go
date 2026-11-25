@@ -303,6 +303,18 @@ func (m *MD) pingLoop() {
 		if every <= 0 {
 			continue
 		}
+		// Never before the session is up. A ping is an encrypted frame, and
+		// sending one while the reader is still feeding the TLS handshake puts
+		// two goroutines on the same session: the handshake then never
+		// completes and the head unit waits for a ClientHello that already
+		// went out as ciphertext. Measured on the bench, 2026-11-25 02:02: the
+		// unit answered the version request, sent its ServerHello, and nothing
+		// was written again for 25 s.
+		select {
+		case <-m.ready:
+		default:
+			continue
+		}
 		if !last.IsZero() && time.Since(last) < every {
 			continue
 		}

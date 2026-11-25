@@ -74,6 +74,52 @@ func TestPhonePingsLikeAWirelessLink(t *testing.T) {
 	}
 }
 
+func TestNoPingsBeforeTheSessionIsUp(t *testing.T) {
+	// A ping is an encrypted frame. Sending one before the TLS handshake is
+	// complete leaves the handshake unfinished: the bench unit answered the
+	// version request, sent its ServerHello, and then waited 25 s for a
+	// ClientHello that had already been written as ciphertext.
+	dir := certDir(t)
+	mdSSL, err := aassl.NewServer(filepath.Join(dir, "android_auto.crt"), filepath.Join(dir, "android_auto.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mdSSL.Close()
+	huSSL, err := aassl.NewClient(filepath.Join(dir, "headunit.crt"), filepath.Join(dir, "headunit.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer huSSL.Close()
+
+	a, b := net.Pipe()
+	defer a.Close()
+	defer b.Close()
+
+	md := session.NewMD(a, mdSSL, log.New(io.Discard, "", 0))
+	md.EnablePings(20 * time.Millisecond) // as soon as the daemon would
+	hu := hupeer.New(b, huSSL, log.New(io.Discard, "", 0))
+	errMD := make(chan error, 1)
+	go func() { errMD <- md.Run() }()
+	go func() { _ = hu.Run() }()
+
+	select {
+	case <-md.WaitReady():
+	case err := <-errMD:
+		t.Fatalf("handshake failed while pings were configured: %v", err)
+	case <-time.After(10 * time.Second):
+		t.Fatal("timeout waiting for SDR: the handshake never completed")
+	}
+
+	// From here the session is up, so pings must flow.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) && hu.PhonePings() < 3 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := hu.PhonePings(); n < 3 {
+		t.Fatalf("only %d pings once the session was up", n)
+	}
+}
+
 func TestMDHUhandshakeAVTouch(t *testing.T) {
 
 	dir := certDir(t)
