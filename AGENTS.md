@@ -47,6 +47,43 @@ instructions in `~/.config/opencode/AGENTS.md`.
   to `192.168.43.1:6730` where the phone is the passive TLS side.
 - `cargadgetd` opens the exchange itself (version request + info request) — this is
   what makes it work on this unit; Android Auto is passive there.
+
+- **The phone pings, and only on wireless.** The official Android Auto sends a
+  `PingRequest` about once a second on a Wi-Fi link and merely answers the head
+  unit's on USB; the reply carries the round trip. We never sent one, and an
+  incoming `PingResponse` fell into `UNHANDLED` (a session failure in strict
+  mode). `MD.EnablePings(1s)` is wired for every non-USB session.
+
+- **The key binding must be exactly the keycodes the unit advertises.** Binding
+  every keycode we know made this unit answer `STATUS_KEYCODE_NOT_BOUND` (-18,
+  `800308eeffffffffffffffff01`) on the input channel: 19 of our 56 codes are not
+  in its SDR list (1, 2, 24, 25, 79, 81, 91, 164, 219, 231, 260-263, 268-271,
+  65539) and one binding covers the whole set, so touch was refused outright.
+  The real phone binds the advertised list and nothing else.
+
+- **Keyframes must keep flowing.** Our stream carried a single IDR, at its start:
+  a hardware decoder that loses its reference then waits for ever and the head
+  unit stops consuming the channel. `RequestIDR()` every 2 s goes through
+  Codec2's input sync flag (no codec reopen); the x264 fallback keeps a 4 s GOP
+  because x264-go cannot be told to emit a keyframe on demand.
+
+- **ConnMan's agent must outlive the join.** ConnMan keeps the passphrase of an
+  *unsaved* service (a head unit's AP — Sailfish cannot store it) only while the
+  agent that supplied it is registered. Unregistering at the end of
+  `JoinWithAgent` deauthenticated the station 200 ms later
+  (`01:47:48.675 join accepted` → `01:47:48.881 link: LOST` → `01:47:49.890
+  associated again`), and on the run before that it landed 24 s into the
+  projection: both MediaAck streams stopped at once, the TCP socket stayed
+  half-open and the writes began to time out. Keep one agent for the whole
+  session and release it only after the head unit's service is removed. A second
+  `Service.Connect` on an already-ready service is skipped for the same reason.
+  `link:` lines carry ConnMan's own state beside the driver's so the actor is
+  visible, and a lost link now ends the session at once instead of waiting out
+  the 20 s silence watchdog.
+
+- **The unit's AP disappears when it sleeps.** A join then fails in about 0.5 s
+  with ConnMan's `No carrier`: the cheap way to tell "the unit is off" from "the
+  unit is on but silent".
 - Reference capture and analysis: `/var/home/manu/captures/sunny-root/AA-REFERENCE-HANDSHAKE.md`
   (kept outside the repository, with the HCI/logcat artifacts).
 

@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
 // wifiSSID returns the SSID wlan0 is associated with, or "".
@@ -72,9 +74,14 @@ func WatchLink(ctx context.Context, iface string, logf func(string, ...any), onL
 		ssid, ip := wifiSSID(iface), wifiIPv4(iface)
 		cur := fmt.Sprintf("ssid=%q ip=%q", ssid, ip)
 		if cur != prev {
+			// ConnMan's own view, logged with the kernel's: when the two
+			// disagree, the service state machine is the actor (an agent
+			// release or a pending Connect re-applying the service), and the
+			// driver is only following.
+			state := connmanStateOf(ssid)
 			switch {
 			case prev == "":
-				logf("link: %s %s", iface, cur)
+				logf("link: %s %s connman=%s", iface, cur, state)
 			case ssid == "" || ip == "":
 				logf("link: LOST %s %s (was %s)", iface, cur, prev)
 				if !lost && onLost != nil {
@@ -82,7 +89,7 @@ func WatchLink(ctx context.Context, iface string, logf func(string, ...any), onL
 					onLost()
 				}
 			default:
-				logf("link: %s moved to %s (was %s)", iface, cur, prev)
+				logf("link: %s moved to %s connman=%s (was %s)", iface, cur, state, prev)
 			}
 			prev = cur
 		}
@@ -92,6 +99,27 @@ func WatchLink(ctx context.Context, iface string, logf func(string, ...any), onL
 		case <-t.C:
 		}
 	}
+}
+
+// connmanStateOf returns ConnMan's State for the service named ssid, or "-".
+func connmanStateOf(ssid string) string {
+	if ssid == "" {
+		return "-"
+	}
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return "?"
+	}
+	services, err := connmanWiFiServices()
+	if err != nil {
+		return "?"
+	}
+	for _, svc := range services {
+		if strings.EqualFold(svc.Name, ssid) {
+			return connmanServiceState(conn, svc.Path)
+		}
+	}
+	return "none"
 }
 
 // defaultGateway returns the IPv4 gateway of iface, or "".
