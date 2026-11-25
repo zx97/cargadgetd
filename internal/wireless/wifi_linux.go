@@ -52,6 +52,48 @@ func logWiFi(iface string, logf func(string, ...any)) {
 	logf("wifi: %s current ssid=%q ip=%q", iface, wifiSSID(iface), wifiIPv4(iface))
 }
 
+// WatchLink reports the interface's association for the duration of a session.
+//
+// A Wi-Fi link that goes away mid-session is indistinguishable, from the
+// session's point of view, from a head unit that stopped talking: the writes
+// block, nothing arrives, and the silence watchdog eventually ends it. Having
+// wlan0's SSID and address in the log is what tells those two apart without a
+// second machine to look from. onLost, when set, runs as soon as the
+// association disappears — the session is over by then.
+func WatchLink(ctx context.Context, iface string, logf func(string, ...any), onLost func()) {
+	if iface == "" || logf == nil {
+		return
+	}
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	prev := ""
+	lost := false
+	for {
+		ssid, ip := wifiSSID(iface), wifiIPv4(iface)
+		cur := fmt.Sprintf("ssid=%q ip=%q", ssid, ip)
+		if cur != prev {
+			switch {
+			case prev == "":
+				logf("link: %s %s", iface, cur)
+			case ssid == "" || ip == "":
+				logf("link: LOST %s %s (was %s)", iface, cur, prev)
+				if !lost && onLost != nil {
+					lost = true
+					onLost()
+				}
+			default:
+				logf("link: %s moved to %s (was %s)", iface, cur, prev)
+			}
+			prev = cur
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // defaultGateway returns the IPv4 gateway of iface, or "".
 //
 // A head unit hands out its own address as the default route of the access

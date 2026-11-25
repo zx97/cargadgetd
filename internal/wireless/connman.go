@@ -390,6 +390,9 @@ func ForgetHeadUnitAPs(logf func(string, ...any)) {
 		}
 	}
 	purgeHeadUnitNetworks("")
+	// Only now, with the head unit's service gone: while it lived, ConnMan
+	// needed the agent to hold the passphrase it cannot store (see keepAgent).
+	ReleaseAgent()
 }
 
 // lastSSIDFile remembers the SSID we joined last, so a name that does not carry

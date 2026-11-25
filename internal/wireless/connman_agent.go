@@ -3,6 +3,7 @@ package wireless
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -75,6 +76,71 @@ func (a *connmanAgent) Cancel() *dbus.Error  { return nil }
 // can log "association" then "ready" instead of silence.
 type ConnManStateFunc func(state string)
 
+// The agent has to outlive the join.
+//
+// ConnMan hands the passphrase of an *unsaved* service (a head unit's AP, which
+// Sailfish cannot store) through the registered agent, and it keeps that secret
+// only while the agent exists. Unregistering at the end of the join made the
+// station deauthenticate about 200 ms later — measured on the bench:
+//
+//	01:47:48.675 wifi: join #1 "carplay_wifi_8687" accepted by ConnMan in 30.481s
+//	01:47:48.881 link: LOST wlan0 ssid="" ip="192.168.43.2"
+//	01:47:49.890 link: wlan0 moved to ssid="carplay_wifi_8687"
+//
+// On the previous run the same deauthentication landed mid-session and the head
+// unit tore the projection down: the picture, the audio and both MediaAck
+// streams stopped 24 s after the session opened, with the TCP connection left
+// half-open. The agent therefore stays registered until the phone leaves the
+// head unit's access point (ReleaseAgent).
+var (
+	agentMu   sync.Mutex
+	agentConn *dbus.Conn
+	agentReg  bool
+)
+
+// keepAgent exports the passphrase agent and registers it with ConnMan, once.
+func keepAgent(psk string, logf func(string, ...any)) error {
+	agentMu.Lock()
+	defer agentMu.Unlock()
+	if agentConn == nil {
+		conn, err := dbus.SystemBus()
+		if err != nil {
+			return fmt.Errorf("connman: system bus: %w", err)
+		}
+		agentConn = conn
+	}
+	agent := &connmanAgent{psk: psk, logf: logf}
+	if err := agentConn.Export(agent, connmanAgentPath, connmanAgentIface); err != nil {
+		return fmt.Errorf("connman: export agent: %w", err)
+	}
+	if !agentReg {
+		mgr := agentConn.Object(connmanService, "/")
+		if err := mgr.Call("net.connman.Manager.RegisterAgent", 0, connmanAgentPath).Err; err != nil {
+			return fmt.Errorf("connman: register agent: %w", err)
+		}
+		agentReg = true
+		if logf != nil {
+			logf("connman: agent registered (kept for the whole session)")
+		}
+	}
+	return nil
+}
+
+// ReleaseAgent unregisters the passphrase agent. Call it only once the phone is
+// off the head unit's access point: while the service lives, ConnMan needs the
+// agent to hold its secret.
+func ReleaseAgent() {
+	agentMu.Lock()
+	defer agentMu.Unlock()
+	if agentConn == nil || !agentReg {
+		return
+	}
+	_ = agentConn.Object(connmanService, "/").
+		Call("net.connman.Manager.UnregisterAgent", 0, connmanAgentPath).Err
+	agentReg = false
+	_ = agentConn.Export(nil, connmanAgentPath, connmanAgentIface)
+}
+
 // JoinWithAgent asks ConnMan to connect ssid, answering its passphrase prompt.
 // It returns once ConnMan reports the service ready (DHCP done) or fails.
 func JoinWithAgent(ssid, psk string, logf func(string, ...any)) error {
@@ -82,23 +148,24 @@ func JoinWithAgent(ssid, psk string, logf func(string, ...any)) error {
 	if err != nil {
 		return fmt.Errorf("connman: system bus: %w", err)
 	}
-	agent := &connmanAgent{psk: psk, logf: logf}
-	if err := conn.Export(agent, connmanAgentPath, connmanAgentIface); err != nil {
-		return fmt.Errorf("connman: export agent: %w", err)
+	if err := keepAgent(psk, logf); err != nil {
+		return err
 	}
-	defer conn.Export(nil, connmanAgentPath, connmanAgentIface)
-
-	mgr := conn.Object(connmanService, "/")
-	if err := mgr.Call("net.connman.Manager.RegisterAgent", 0, connmanAgentPath).Err; err != nil {
-		return fmt.Errorf("connman: register agent: %w", err)
-	}
-	defer mgr.Call("net.connman.Manager.UnregisterAgent", 0, connmanAgentPath)
 
 	// The AP must be in a scan result before it can be connected: this is the
 	// step that used to fail with "no saved wifi service".
 	svc, err := waitConnmanService(conn, ssid, 20*time.Second, logf)
 	if err != nil {
 		return err
+	}
+	// Already up (wpa_supplicant autostart re-associates a network this phone
+	// used before): a second Connect would re-apply the service and deauth the
+	// station in the middle of the session.
+	if st := connmanServiceState(conn, svc); st == "ready" || st == "online" {
+		if logf != nil {
+			logf("connman: %q already %s, no connect issued", ssid, st)
+		}
+		return nil
 	}
 
 	connectErr := make(chan error, 1)
