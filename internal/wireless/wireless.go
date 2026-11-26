@@ -272,6 +272,13 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 // bring the ACL link up, find the AA RFCOMM channel, and hand the connection to
 // the WPP handshake. It returns the first error, so Dial can move to the next
 // candidate.
+// aapPorts are the ports a head unit may listen on for AAP once the phone has
+// joined its access point. 6730 is what Android Auto's own wireless service
+// uses, and what the Melia answers on; the VW MIB3 answers nothing there
+// (10.173.189.1:6730 timed out six times on 2026-11-26), so the others are
+// tried when the car sends no endpoint at all.
+var aapPorts = []string{"6730", "5277", "5288", "5289", "32847", "5000"}
+
 func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, guess string,
 	acceptIncoming func(string) (net.Conn, bool)) (net.Conn, error) {
 	t := time.Now()
@@ -658,6 +665,7 @@ waitLoop:
 
 	st.Set("WPP handshake", true, endpoint)
 	st.Phase("wifi")
+	var sweep []string
 	if endpoint == "" {
 		// The gateway can only be read once the interface is on the car's access
 		// point; reading it here would return the home router. Resolved after the
@@ -694,10 +702,17 @@ waitLoop:
 		if gw == "" {
 			gw = "192.168.43.1"
 		}
-		endpoint = net.JoinHostPort(gw, "6730")
+		sweep = make([]string, 0, len(aapPorts))
+		endpoint = net.JoinHostPort(gw, aapPorts[0])
 		opt.logf("wpp: no start request carried an endpoint, using the access point gateway %s", endpoint)
 		st.Set("Endpoint", true, endpoint)
 		st.Step("Car endpoint (default): %s", endpoint)
+		// Walk the other documented ports as well before giving up: the VW
+		// MIB3 sends no endpoint either, its access point is 10.173.189.0/24,
+		// and 10.173.189.1:6730 answered nothing but a timeout (2026-11-26).
+		for _, p := range aapPorts[1:] {
+			sweep = append(sweep, net.JoinHostPort(gw, p))
+		}
 	}
 	if err := send(wppConnectStatus, buildConnectStatus(wppStatusSuccess), "connect status SUCCESS"); err != nil {
 		return nil, err
@@ -717,6 +732,20 @@ waitLoop:
 		}
 		opt.logf("tcp: dial %s attempt %d/6 failed after %s: %v", endpoint, attempt, sinceText(t), dialErr)
 		time.Sleep(400 * time.Millisecond)
+	}
+	// Endpoint unknown: try the remaining AAP ports, two tries each, and keep
+	// the one that answers.
+	for i := 0; dialErr != nil && i < len(sweep); i++ {
+		for attempt := 1; attempt <= 2; attempt++ {
+			conn, dialErr = net.DialTimeout("tcp", sweep[i], 2*time.Second)
+			if dialErr == nil {
+				opt.logf("tcp: %s answered, using it", sweep[i])
+				st.Set("Endpoint", true, sweep[i])
+				endpoint = sweep[i]
+				break
+			}
+			opt.logf("tcp: dial %s attempt %d/2 failed after %s: %v", sweep[i], attempt, sinceText(t), dialErr)
+		}
 	}
 	if dialErr != nil {
 		st.Set("Car TCP", false, dialErr.Error())
