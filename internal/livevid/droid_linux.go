@@ -601,6 +601,17 @@ func pickDroidColor(fmts []C.uint32_t) (color int, layout int) {
 
 func (e *droidEnc) Name() string { return "droidmedia-hw" }
 
+// CodecConfig returns the SPS/PPS the encoder reported, Annex-B, ready to be
+// sent as a CODEC_CONFIG message.
+func (e *droidEnc) CodecConfig() []byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.cfg) == 0 {
+		return nil
+	}
+	return append([]byte(nil), e.cfg...)
+}
+
 // IDR asks for a keyframe on the next encoded frame by marking that input buffer
 // as a sync frame. Much cheaper than Renderer.ForceIDR, which tears the codec
 // down and rebuilds it: periodic keyframes are normal traffic, reopens are a

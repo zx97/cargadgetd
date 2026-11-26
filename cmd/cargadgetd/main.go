@@ -669,6 +669,7 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 
 		var ts uint64
 		videoStarted := false
+		codecSent := false
 		streaming := true
 		nextFrame := time.Now()
 		var bypassN, skipN uint64
@@ -814,6 +815,19 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 				log.Printf("live encode: %v", err)
 				nextFrame = nextFrame.Add(framePeriod)
 				continue
+			}
+			// The parameter sets go out as CODEC_CONFIG before the first frame:
+			// a head unit that reads only that message never learns the picture
+			// size and acks our frames without ever showing them.
+			if !codecSent {
+				if cc := live.CodecConfig(); len(cc) > 0 {
+					if err := md.SendVideoCodecConfig(cc); err != nil {
+						log.Printf("video CODEC_CONFIG: %v", err)
+					} else {
+						codecSent = true
+						log.Printf("video CODEC_CONFIG sent (%dB)", len(cc))
+					}
+				}
 			}
 			t0 := time.Now()
 			if usbPace {

@@ -43,7 +43,7 @@ func AssociateWiFi(ssid, passphrase, iface string, logf func(string, ...any)) er
 	// Keep the saved home network from pulling the interface back mid-session.
 	suspendOtherAutoConnect(ssid)
 
-	if err := wpaJoin(ssid, passphrase); err != nil {
+	if err := wpaCliJoin(ssid, passphrase, iface); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(20 * time.Second)
@@ -55,6 +55,90 @@ func AssociateWiFi(ssid, passphrase, iface string, logf func(string, ...any)) er
 	}
 	logf("wpa: associated %q, taking the lease", ssid)
 	return dhcpLease(iface, logf)
+}
+
+// wpaCliJoin adds and selects an access point through wpa_cli.
+//
+// Not the D-Bus API: this wpa_supplicant build answers AddNetwork with
+// "invalid message format" whatever the dictionary holds (measured 2026-11-25
+// on the Jolla). wpa_cli talks to the same control socket over a text protocol
+// and works, and the helper that runs it is root anyway.
+func wpaCliJoin(ssid, passphrase, iface string) error {
+	if ssid == "" || strings.ContainsAny(ssid, "\"\n") {
+		return fmt.Errorf("wpa_cli: unusable ssid %q", ssid)
+	}
+	if strings.ContainsAny(passphrase, "\"\n") {
+		return fmt.Errorf("wpa_cli: passphrase contains a quote or newline")
+	}
+	cli := func(args ...string) (string, error) {
+		full := append([]string{"-i", iface, "-p", "/var/run/wpa_supplicant"}, args...)
+		out, err := exec.Command("/usr/sbin/wpa_cli", full...).CombinedOutput()
+		s := strings.TrimSpace(string(out))
+		if err != nil {
+			return s, fmt.Errorf("wpa_cli %s: %v (%s)", strings.Join(args, " "), err, s)
+		}
+		if strings.Contains(s, "FAIL") {
+			return s, fmt.Errorf("wpa_cli %s: %s", strings.Join(args, " "), lastNonEmpty(s))
+		}
+		return s, nil
+	}
+
+	// Drop the dead carplay_* blocks this unit leaves behind: it regenerates its
+	// SSID every power cycle, so the list grows for ever otherwise.
+	if list, err := cli("list_networks"); err == nil {
+		for _, line := range strings.Split(list, "\n") {
+			f := strings.Split(line, "\t")
+			if len(f) < 2 || f[0] == "network id" {
+				continue
+			}
+			quoted := fmt.Sprintf("%q", ssid)
+			if f[1] == quoted {
+				if _, err := cli("remove_network", f[0]); err == nil {
+					continue
+				}
+			}
+			if strings.HasPrefix(f[1], "carplay_wifi") {
+				_, _ = cli("remove_network", f[0])
+			}
+		}
+	}
+
+	out, err := cli("add_network")
+	if err != nil {
+		return err
+	}
+	idx := lastNonEmpty(out)
+	if idx == "" || idx == "FAIL" {
+		return fmt.Errorf("wpa_cli add_network: %q", out)
+	}
+	steps := [][]string{
+		{"set_network", idx, "ssid", fmt.Sprintf("%q", ssid)},
+		{"set_network", idx, "key_mgmt", "WPA-PSK"},
+		{"set_network", idx, "psk", fmt.Sprintf("%q", passphrase)},
+		// select_network forces the association; this wpa_supplicant has no
+		// "autostart" network parameter (it answers FAIL), and the block is
+		// removed again by ForgetHeadUnitAPs when the session ends, so nothing
+		// rejoins this AP on its own.
+		{"enable_network", idx},
+		{"select_network", idx},
+	}
+	for _, st := range steps {
+		if _, err := cli(st...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// lastNonEmpty returns the last non-blank line of s, trimmed.
+func lastNonEmpty(s string) string {
+	lines := strings.Split(strings.TrimSpace(s), "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if l := strings.TrimSpace(lines[i]); l != "" {
+			return l
+		}
+	}
+	return ""
 }
 
 // udhcpcScript applies (and removes) a busybox udhcpc lease. Kept inline so the

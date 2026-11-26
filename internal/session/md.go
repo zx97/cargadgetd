@@ -42,14 +42,23 @@ const (
 
 // Media / input (channel-specific).
 const (
+	// Media-level messages (aap_protobuf MediaMessage). 0x0000 carries an
+	// 8-byte timestamp then the payload; 0x0001 carries parameter sets only.
+	// Our "MediaIndication" name was wrong: 0x0001 is CODEC_CONFIG, so sending
+	// a frame with it handed the head unit the picture as if it were SPS/PPS.
 	MediaWithTimestamp = 0x0000
-	MediaIndication    = 0x0001
+	MediaCodecConfig   = 0x0001
 	MediaSetupRequest  = 0x8000
 	MediaStartInd      = 0x8001
 	MediaStopInd       = 0x8002
 	MediaSetupResponse = 0x8003
 	MediaAck           = 0x8004
-	VideoFocusInd      = 0x8008
+	// VideoFocusRequest: the phone asks to be shown (mode 1 = projected).
+	// AARE sends it right after START, "ask to be shown; head units answer with
+	// a focus notification" — and the Melia keeps its own wallpaper instead of
+	// our stream until it is asked.
+	VideoFocusRequest = 0x8007
+	VideoFocusInd     = 0x8008
 	// Sensor channel: MD opens it and StartRequests types the HU advertised.
 	// HU replies with SensorStartResponse and streams SensorEvent (car → phone).
 	SensorStartRequest  = 0x8001
@@ -1151,6 +1160,16 @@ func (m *MD) handleChannel(channel uint8, flags uint8, msgType uint16, body, ful
 			return nil
 		case VideoFocusInd:
 			return m.onVideoFocus(channel, body)
+		case VideoFocusRequest:
+			// The head unit asks us to change focus; confirm the mode it asked
+			// for (AARE does the same, and a unit left unanswered stops
+			// projecting).
+			mode := 1
+			if len(body) >= 2 && body[0] == 0x08 {
+				mode = int(body[1])
+			}
+			m.log.Printf("video focus request from the unit mode=%d — confirming", mode)
+			return m.sendEnc(channel, 0, VideoFocusInd, []byte{0x08, byte(mode)})
 		case MediaStopInd:
 			m.log.Printf("video MediaStopInd body=%x — pause streaming", body)
 			m.capturef("VIDEO_STOP", "body=%x", body)
@@ -1246,6 +1265,14 @@ func (m *MD) onVideoFocus(channel uint8, body []byte) error {
 	ind = append(ind, 0x08, 0x00, 0x10, byte(cfgIdx))
 	m.log.Printf("video StartInd session=0 config_index=%d size=%dx%d m=%dx%d", cfgIdx, vw, vh, mw, mh)
 	m.enqueueAsync(channel, frame.FlagBulk|frame.FlagEncrypted, ind)
+	// Ask to be shown. The head unit answers with a focus notification, and
+	// some units keep their own wallpaper — while acking every one of our
+	// frames — until the phone asks: measured on the Melia, 4505 acks and 2m52s
+	// of stream with its background still on screen.
+	ask := frame.PutU16(nil, VideoFocusRequest)
+	ask = append(ask, 0x08, 0x01) // mode = VIDEO_FOCUS_PROJECTED
+	m.log.Printf("video focus request (projected)")
+	m.enqueueAsync(channel, frame.FlagBulk|frame.FlagEncrypted, ask)
 	m.videoStreaming.Store(true)
 	m.mu.Lock()
 	if !m.started {
@@ -2215,15 +2242,28 @@ func (m *MD) SendH264Credit(tsMicros uint64, annexB []byte) (bypassed bool, err 
 	return false, err
 }
 
+// SendVideoCodecConfig sends the H.264 parameter sets as their own
+// CODEC_CONFIG message (0x0001 on the media channel), which is what the
+// official phone does instead of leaving them in-band only. Rails: a unit that
+// waits for this message acks every frame of ours and shows nothing, because it
+// never learns the picture size.
+func (m *MD) SendVideoCodecConfig(annexB []byte) error {
+	if len(annexB) == 0 {
+		return nil
+	}
+	p := frame.PutU16(nil, MediaCodecConfig)
+	p = append(p, annexB...)
+	return m.enqueueTimeout(m.VideoCh, frame.FlagBulk|frame.FlagEncrypted, p, 3*time.Second)
+}
+
 // SendH264Reserved enqueues a video AU after ReserveVideoCredit.
 func (m *MD) SendH264Reserved(tsMicros uint64, annexB []byte) error {
-	var p []byte
-	if tsMicros == 0 {
-		p = frame.PutU16(nil, MediaIndication)
-	} else {
-		p = frame.PutU16(nil, MediaWithTimestamp)
-		p = frame.PutU64(p, tsMicros)
-	}
+	// Always DATA (0x0000): an 8-byte timestamp then the AU. The timestamp is
+	// kept even when zero — 0x0001 is CODEC_CONFIG, not "a frame without a
+	// timestamp", and sending picture data there gave the head unit the AU as
+	// if it were SPS/PPS.
+	p := frame.PutU16(nil, MediaWithTimestamp)
+	p = frame.PutU64(p, tsMicros)
 	p = append(p, annexB...)
 	timeout := 3 * time.Second
 	if m.usbBulk {

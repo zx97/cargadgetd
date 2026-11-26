@@ -290,6 +290,27 @@ func (r *Renderer) acceptLocked(au []byte) ([]byte, error) {
 }
 
 // Bitrate is the live CBR target in bits per second.
+// CodecConfig returns the H.264 parameter sets (SPS/PPS, Annex-B with start
+// codes) the encoder has produced, or nil when the codec keeps them to itself.
+//
+// The official phone sends them as their own CODEC_CONFIG message instead of
+// relying on them being in-band: a head unit that reads that message and gets
+// nothing never learns the picture size, and answers ack after ack without
+// ever showing anything.
+func (r *Renderer) CodecConfig() []byte {
+	r.mu.Lock()
+	enc := r.enc
+	r.mu.Unlock()
+	if enc == nil {
+		return nil
+	}
+	if c, ok := enc.(interface{ CodecConfig() []byte }); ok {
+		return c.CodecConfig()
+	}
+	return nil
+}
+
+// Bitrate returns the live CBR target.
 func (r *Renderer) Bitrate() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()

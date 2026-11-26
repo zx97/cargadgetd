@@ -330,7 +330,7 @@ func (p *Peer) onChannel(ch uint8, msgType uint16, body, full []byte) error {
 		}
 		return nil
 
-	case session.MediaIndication, session.MediaWithTimestamp:
+	case session.MediaCodecConfig, session.MediaWithTimestamp:
 		p.mu.Lock()
 		if ch == session.ChanVideo {
 			p.videoFrames++

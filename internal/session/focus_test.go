@@ -83,6 +83,19 @@ func recvStartInd(t *testing.T, m *MD) []byte {
 	if len(msg.payload) < 2 || msg.payload[0] != 0x80 || msg.payload[1] != 0x01 {
 		t.Fatalf("payload %x, want MediaStartInd", msg.payload)
 	}
+	// The focus request follows the StartInd: "ask to be shown", which is what
+	// makes a unit stop showing its own wallpaper. Consume it here so the rest
+	// of the tests still see "nothing else was enqueued".
+	ask, ok := tryRecv(m)
+	if !ok {
+		t.Fatal("missing VideoFocusRequest after StartInd")
+	}
+	if len(ask.payload) < 2 || ask.payload[0] != 0x80 || ask.payload[1] != 0x07 {
+		t.Fatalf("payload %x, want VideoFocusRequest after StartInd", ask.payload)
+	}
+	if len(ask.payload) < 4 || ask.payload[2] != 0x08 || ask.payload[3] != 0x01 {
+		t.Fatalf("focus request %x, want mode projected (08 01)", ask.payload)
+	}
 	return msg.payload
 }
 
