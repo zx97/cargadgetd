@@ -84,6 +84,19 @@ instructions in `~/.config/opencode/AGENTS.md`.
 - **The unit's AP disappears when it sleeps.** A join then fails in about 0.5 s
   with ConnMan's `No carrier`: the cheap way to tell "the unit is off" from "the
   unit is on but silent".
+
+- **Do not open channels we do not speak.** Opening every service the unit lists
+  (microphone `ch3`, media audio `ch5`, speech audio `ch6`, phone status `ch9`)
+  makes this unit answer MediaAck after MediaAck for minutes — 4505 frames over
+  2m52s — while it keeps its own animated wallpaper on screen. The A/B is exact:
+  the sessions that showed our picture (2026-11-25 01:29 and 01:34) opened five
+  channels (video, input, sensor, Bluetooth, one audio sink) and nothing else,
+  with the same SDR, the same `StartInd` (`session=0 config_index=0 1280x720`)
+  and the same audio sink as the failing ones. The passive opens sit behind
+  `CARGADGETD_OPEN_ALL_CHANNELS=1` now.
+  A unit that acks a stream is therefore no proof that it displays it: the ack
+  is receipt, not decode. Screenshots and the unit's own screen are the only
+  honest signals.
 - Reference capture and analysis: `/var/home/manu/captures/sunny-root/AA-REFERENCE-HANDSHAKE.md`
   (kept outside the repository, with the HCI/logcat artifacts).
 
