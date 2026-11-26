@@ -314,6 +314,7 @@ func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, g
 		// deserves the time: a head unit that is switched off must not cost a
 		// full SDP and probe cycle.
 		opt.logf("bluetooth: link still down after 4s, skipping %s", cand.Name)
+		NoteAbsent(cand.Address)
 		human := humanBluetoothError(linkErr)
 		if human == nil {
 			human = fmt.Errorf("%s: Bluetooth link never came up", cand.Name)
@@ -370,11 +371,15 @@ func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, g
 	rc, err := dialRFCOMM(cand.Address, channel, opt.logf)
 	if err != nil {
 		human := humanBluetoothError(err)
+		if errors.Is(human, errCarAbsent) {
+			NoteAbsent(cand.Address)
+		}
 		opt.logf("rfcomm: connect %s channel %d failed after %s: %v", cand.Address, channel, sinceText(t), err)
 		st.Error(human)
 		st.Set("RFCOMM", false, human.Error())
 		return nil, human
 	}
+	NotePresent(cand.Address)
 	st.Setf("RFCOMM", true, "channel %d", channel)
 	st.Phase("wpp")
 	if fc, ok := rc.(*fileConn); ok {

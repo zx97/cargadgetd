@@ -35,6 +35,16 @@ type Device struct {
 	Connected        bool
 	ServicesResolved bool
 	UUIDs            []string
+	// Class is the Bluetooth class of device. It is what separates a head unit
+	// from another phone: the paired phones answer the AA RFCOMM probe too, and
+	// one of them holding candidate 1 kept the real unit out of its window.
+	Class uint32
+}
+
+// IsPhone reports whether this device is a phone (class major 0x02). Those are
+// never dialled before a head unit.
+func (d *Device) IsPhone() bool {
+	return (d.Class>>8)&0x1f == 0x02
 }
 
 // FindDevice returns the paired device matching address (exact) or name
@@ -94,6 +104,11 @@ func FindDevices(name, address string) ([]*Device, error) {
 		d.Bonded = variantBool(props["Bonded"])
 		d.Trusted = variantBool(props["Trusted"])
 		d.Connected = variantBool(props["Connected"])
+		if v, ok := props["Class"]; ok {
+			if c, ok := v.Value().(uint32); ok {
+				d.Class = c
+			}
+		}
 		d.ServicesResolved = variantBool(props["ServicesResolved"])
 		if v, ok := props["Adapter"]; ok {
 			d.Adapter, _ = v.Value().(dbus.ObjectPath)
@@ -134,6 +149,7 @@ func FindDevices(name, address string) ([]*Device, error) {
 			name, address, strings.Join(seen, ", "))
 	}
 	orderCandidates(picked)
+	demoteAbsent(picked)
 	return picked, nil
 }
 
@@ -147,6 +163,11 @@ func FindDevices(name, address string) ([]*Device, error) {
 // the one that could not answer).
 func orderCandidates(ds []*Device) {
 	sort.SliceStable(ds, func(i, j int) bool {
+		// A phone is never the car, whatever its connection state: the user's
+		// own handset answers the AA probe and stole candidate 1.
+		if pi, pj := ds[i].IsPhone(), ds[j].IsPhone(); pi != pj {
+			return !pi
+		}
 		if ds[i].Connected != ds[j].Connected {
 			return ds[i].Connected
 		}
