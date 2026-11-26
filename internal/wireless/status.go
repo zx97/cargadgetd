@@ -85,6 +85,22 @@ type Status struct {
 	wifiWant    string
 	btName      string
 	usbName     string
+	// capture runs a Bluetooth HCI recording; set by the daemon, which owns
+	// the setuid helper that can open the monitor channel.
+	capture func() error
+}
+
+// SetCapture installs the action behind the "Record Bluetooth" button.
+func (s *Status) SetCapture(f func() error) {
+	s.mu.Lock()
+	s.capture = f
+	s.mu.Unlock()
+}
+
+func (s *Status) captureFn() func() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.capture
 }
 
 const wppLogMax = 300

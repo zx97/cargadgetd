@@ -55,6 +55,23 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 			html.EscapeString(T(DetectLang(r), "Restarting…")))
 	})
 
+	mux.HandleFunc("/bt-capture", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		msg := T(DetectLang(r), "Recording Bluetooth…")
+		if capture := s.captureFn(); capture != nil {
+			if err := capture(); err != nil {
+				msg = err.Error()
+			}
+		} else {
+			msg = T(DetectLang(r), "capture unavailable")
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		fmt.Fprintf(w, `<meta http-equiv="refresh" content="3;url=/"><p>%s</p>`, html.EscapeString(msg))
+	})
+
 	mux.HandleFunc("/usb-fix", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -341,6 +358,10 @@ pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;o
 <form method="post" action="/stop" style="flex:1"><button class="stop" type="submit">` + T(lang, "Stop") + `</button></form>
 <form method="post" action="/restart" style="flex:1"><button class="restart" type="submit">` + T(lang, "Restart") + `</button></form>
 </div>`)
+	// Bluetooth capture: 3 minutes into the home directory, then readable from
+	// the PC. It needs root, which the setuid helper provides.
+	b.WriteString(`<form method="post" action="/bt-capture" style="margin-top:8px"><button type="submit" style="width:100%;padding:12px;font-size:.95rem;border-radius:10px;border:0;color:#fff;background:#7f5af0">` +
+		T(lang, "Record Bluetooth (3 min)") + `</button></form>`)
 
 	if snap.WiFiWant != "" {
 		fmt.Fprintf(&b, `<form id="wifiForm" method="post" action="/wifi"><button id="wifiBtn" class="wifi" type="submit" style="width:100%%">`+T(lang, "Join Wi-Fi %s")+`</button></form>`,

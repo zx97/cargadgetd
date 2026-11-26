@@ -220,6 +220,27 @@ func main() {
 			*wirelessName, *wirelessAddr, *wirelessChannel, *wirelessIface)
 		st := wireless.NewStatus()
 		st.SetNames(btName, usbName)
+		// The "Record Bluetooth" button: the monitor channel needs root, so the
+		// setuid helper does the recording while the page stays responsive.
+		st.SetCapture(func() error {
+			bin := cfg.Get().Gadget.Bin
+			if bin == "" {
+				return fmt.Errorf("no helper configured (gadget.bin)")
+			}
+			out := fmt.Sprintf("/home/defaultuser/hci-%s.btsnoop", time.Now().Format("20060102-150405"))
+			cmd := exec.Command(bin, "-bt-capture", out, "-bt-capture-seconds", "180")
+			cmd.Env = os.Environ()
+			if err := cmd.Start(); err != nil {
+				return fmt.Errorf("capture: %w", err)
+			}
+			log.Printf("bt capture: recording 180s to %s (helper pid %d)", out, cmd.Process.Pid)
+			go func() {
+				if err := cmd.Wait(); err != nil {
+					log.Printf("bt capture: %v", err)
+				}
+			}()
+			return nil
+		})
 		if mat.ExpiresIn < 0 {
 			st.SetStatic("MD certificate", false, fmt.Sprintf("expired (expires_in=%ds)", mat.ExpiresIn))
 		} else {

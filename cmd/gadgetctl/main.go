@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/cargadgetd/cargadgetd/internal/aoa"
+	"github.com/cargadgetd/cargadgetd/internal/btcapture"
 	"github.com/cargadgetd/cargadgetd/internal/ffs"
 	"github.com/cargadgetd/cargadgetd/internal/usbcable"
 	"github.com/cargadgetd/cargadgetd/internal/wireless"
@@ -44,6 +45,8 @@ func main() {
 	aoaService := flag.String("aoa-service", "", "start, stop, or restart cargadgetd-aoa.service (setuid)")
 	wifiConnect := flag.String("wifi-connect", "", "connect a saved Wi-Fi service (setuid root) and exit")
 	wifiJoin := flag.String("wifi-join", "", "connect a Wi-Fi AP, provisioning it with a passphrase if needed (setuid root) and exit")
+	btCapture := flag.String("bt-capture", "", "record Bluetooth HCI traffic to this btsnoop file (setuid root) and exit")
+	btCaptureSecs := flag.Int("bt-capture-seconds", 180, "how long -bt-capture records")
 	wifiAssoc := flag.String("wifi-assoc", "", "associate a Wi-Fi AP through wpa_supplicant and take the lease with udhcpc, no ConnMan connect (setuid root) and exit")
 	wifiIface := flag.String("wifi-iface", "wlan0", "interface used by -wifi-assoc")
 	wifiPSK := flag.String("wifi-psk", "", "passphrase used by -wifi-join")
@@ -97,6 +100,21 @@ func main() {
 		if err := wireless.PairDevice(*btPair, *btPin, log.Printf); err != nil {
 			log.Fatalf("pairing %s: %v", *btPair, err)
 		}
+		return
+	}
+
+	if *btCapture != "" {
+		if os.Geteuid() != 0 {
+			log.Fatal("gadgetctl -bt-capture needs root (install setuid RPM or use devel-su)")
+		}
+		if err := becomeRoot(); err != nil {
+			log.Fatalf("become root: %v", err)
+		}
+		n, err := btcapture.Record(*btCapture, time.Duration(*btCaptureSecs)*time.Second)
+		if err != nil {
+			log.Fatal(err)
+		}
+		log.Printf("bt capture: %d records -> %s", n, *btCapture)
 		return
 	}
 
