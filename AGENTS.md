@@ -97,6 +97,19 @@ instructions in `~/.config/opencode/AGENTS.md`.
   A unit that acks a stream is therefore no proof that it displays it: the ack
   is receipt, not decode. Screenshots and the unit's own screen are the only
   honest signals.
+
+- **The working wireless configuration (2026-11-26)**: five channels (video,
+  input, sensor, Bluetooth, one audio sink), phone pings at 1 s, a
+  `VIDEO_FOCUS_REQUEST` after START, SPS/PPS in a `CODEC_CONFIG` message as well
+  as in-band, an IDR every 2 s, and the shell's apps started *after* their
+  plugins have loaded. With that the Melia shows our shell, the touch works, and
+  the **Link** app projects the phone's own apps (Waze) onto the unit.
+
+- **`libcargadgetd_app_link.so` must not ship disabled.** The package installs
+  it as `libcargadgetd_app_link.so.off`, so the shell loads only Maps, Hello and
+  Settings. Renaming it to `.so` adds the Link tile, and Link is what brings the
+  phone's real apps to the car. Anyone testing "the apps do nothing" should check
+  that suffix first.
 - Reference capture and analysis: `/var/home/manu/captures/sunny-root/AA-REFERENCE-HANDSHAKE.md`
   (kept outside the repository, with the HCI/logcat artifacts).
 
