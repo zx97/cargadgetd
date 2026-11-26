@@ -133,13 +133,30 @@ func FindDevices(name, address string) ([]*Device, error) {
 		return nil, fmt.Errorf("no paired Bluetooth device matches name=%q address=%q; seen: %s",
 			name, address, strings.Join(seen, ", "))
 	}
-	// AA-UUID devices first: that is the only real hint of a head unit that
-	// speaks Android Auto. The rest stay in the list so a unit that does not
-	// advertise the UUID (some cheap ones do not) is still tried.
-	sort.SliceStable(picked, func(i, j int) bool {
-		return hasUUID(picked[i].UUIDs, aaUUIDText) && !hasUUID(picked[j].UUIDs, aaUUIDText)
-	})
+	orderCandidates(picked)
 	return picked, nil
+}
+
+// orderCandidates sorts paired devices the way dialling wants them: the one the
+// phone is connected to first, then AA-UUID devices, then by address.
+//
+// Connected first is not a nicety: it is the only state that means "this head
+// unit is here, now". A paired unit that is parked far away must never take
+// precedence (measured 2026-11-26: candidate 1 was the MULTIVAN, connected=false,
+// while the lab unit was connected=true at candidate 2, and the attempt went to
+// the one that could not answer).
+func orderCandidates(ds []*Device) {
+	sort.SliceStable(ds, func(i, j int) bool {
+		if ds[i].Connected != ds[j].Connected {
+			return ds[i].Connected
+		}
+		ai := hasUUID(ds[i].UUIDs, aaUUIDText)
+		aj := hasUUID(ds[j].UUIDs, aaUUIDText)
+		if ai != aj {
+			return ai
+		}
+		return ds[i].Address < ds[j].Address
+	})
 }
 
 func variantString(v dbus.Variant) string {
