@@ -20,12 +20,14 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"encoding/pem"
 	"flag"
 	"log"
 	"math/big"
 	"net"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/cargadgetd/cargadgetd/internal/session/hupeer"
@@ -35,7 +37,16 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:5277", "MD address (host:port)")
 	wait := flag.Duration("wait", 30*time.Second, "how long to keep the session open")
+	sdrHex := flag.String("sdr", "", "replay this ServiceDiscoveryResponse (hex) instead of the built-in one")
 	flag.Parse()
+	if *sdrHex != "" {
+		raw, err := hex.DecodeString(strings.TrimSpace(*sdrHex))
+		if err != nil {
+			log.Fatalf("bad -sdr: %v", err)
+		}
+		hupeer.CustomSDR = raw
+		log.Printf("replaying a %d-byte ServiceDiscoveryResponse", len(raw))
+	}
 
 	conn, err := net.DialTimeout("tcp", *addr, 5*time.Second)
 	if err != nil {

@@ -60,6 +60,9 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	certInfo := flag.Bool("cert-info", false, "print reversegearhead_probe and exit")
 	flag.Parse()
+	// One daemon at a time: two encoders (wireless projecting + USB on a
+	// charger) crash Codec2 on this phone.
+	claimSingleInstance()
 
 	// Millisecond timestamps: the wireless log is read to compare phase
 	// durations, and whole seconds hide the interesting gaps.

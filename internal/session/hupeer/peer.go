@@ -126,6 +126,10 @@ func readVarintHu(b []byte) (uint64, int) {
 	return 0, 0
 }
 
+// CustomSDR, when set, replaces the discovery response this peer sends: a
+// recorded head unit's own bytes can be replayed without the car.
+var CustomSDR []byte
+
 func New(rw io.ReadWriter, ssl *aassl.Session, logger *log.Logger) *Peer {
 	if logger == nil {
 		logger = log.Default()
@@ -250,6 +254,9 @@ func (p *Peer) Run() error {
 		case session.MsgServiceDiscoveryRequest:
 			p.log.Printf("hu: SDR request")
 			sdr := buildTestSDR()
+			if len(CustomSDR) > 0 {
+				sdr = CustomSDR
+			}
 			msg := frame.PutU16(nil, session.MsgServiceDiscoveryResponse)
 			msg = append(msg, sdr...)
 			if err := p.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, msg); err != nil {
