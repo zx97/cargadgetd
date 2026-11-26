@@ -48,6 +48,7 @@ func main() {
 	configPath := flag.String("config", "", "YAML config file (default: search path after compiled defaults)")
 	autoAV := flag.Bool("auto-av", true, "open AV channels and stream livevid after SDR")
 	wirelessFlag := flag.Bool("wireless", false, "connect to a paired head unit over Bluetooth/Wi-Fi instead of USB")
+	dialFlag := flag.String("dial", "", "dial a head unit's AAP endpoint directly (tcp://host:port), no Bluetooth pairing needed")
 	wirelessName := flag.String("wireless-name", "", "paired head unit Bluetooth name (default: the paired device advertising the Android Auto UUID)")
 	wirelessAddr := flag.String("wireless-addr", "", "paired head unit Bluetooth address")
 	wirelessChannel := flag.Int("wireless-channel", 0, "head unit AA RFCOMM channel (0 = discover over SDP)")
@@ -195,6 +196,23 @@ func main() {
 		mdMu.md = md
 		defer func() { mdMu.md = nil }()
 		runSession(md, *autoAV, usbBulk, onReady)
+	}
+
+	// -dial: the bench path when the head unit offers its access point by hand
+	// (SSID and passphrase on its screen) instead of through the Bluetooth
+	// handshake. The unit is the AAP server; we are the passive TLS side, the
+	// same role we play after a WPP exchange.
+	if *dialFlag != "" {
+		addr := strings.TrimPrefix(*dialFlag, "tcp://")
+		log.Printf("dial: connecting to %s (no Bluetooth)", addr)
+		conn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+		if err != nil {
+			log.Fatalf("dial %s: %v", addr, err)
+		}
+		log.Printf("dial: connected to %s", addr)
+		serve(conn, "dial:"+addr, false, nil)
+		log.Printf("dial: session over")
+		return
 	}
 
 	if *wirelessFlag {
