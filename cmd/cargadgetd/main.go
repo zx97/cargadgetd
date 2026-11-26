@@ -402,7 +402,15 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 		// back until every channel is open; the Melia lists nine services and
 		// we speak five, so this covers the microphone, the extra audio sinks
 		// and the phone status channel it also announced.
-		md.OpenEveryListedChannel()
+		// Off by default since 2026-11-26: the sessions that showed our picture
+		// on the Melia (25/11 01:29 and 01:34) opened five channels (video,
+		// input, sensor, Bluetooth, one audio); every session since the passive
+		// opening of the microphone and the extra audio sinks showed the unit's
+		// own wallpaper instead, with the same stream it had acked before.
+		// Keep it behind a switch to re-test that A/B on the bench.
+		if os.Getenv("CARGADGETD_OPEN_ALL_CHANNELS") == "1" {
+			md.OpenEveryListedChannel()
+		}
 		select {
 		case <-md.WaitVideoStarted():
 			log.Printf("video started")
