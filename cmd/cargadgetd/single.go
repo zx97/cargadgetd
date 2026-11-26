@@ -39,12 +39,18 @@ func singleInstance() (*os.File, error) {
 		return nil, fmt.Errorf("another cargadgetd-md holds %s", path)
 	}
 	// Say who holds it, so a stale-looking conflict is explainable.
-	fmt.Fprintf(f, "%d %s\n", os.Getpid(), filepath.Base(os.Args[0]))
-	if err := f.Truncate(0); err == nil {
-		fmt.Fprintf(f, "%d\n", os.Getpid())
+	_ = f.Truncate(0)
+	if _, err := f.Seek(0, 0); err == nil {
+		fmt.Fprintf(f, "%d %s\n", os.Getpid(), filepath.Base(os.Args[0]))
 	}
 	return f, nil
 }
+
+// lockFile keeps the lock's file descriptor reachable for the whole process:
+// a local *os.File is finalised by the garbage collector, which closes the fd
+// and silently releases the flock — two daemons then run side by side, which is
+// exactly what this guard exists to prevent.
+var lockFile *os.File
 
 // claimSingleInstance exits when another daemon already runs. The wireless and
 // the USB launcher both call it; the second one leaves quietly.
@@ -54,5 +60,5 @@ func claimSingleInstance() {
 		log.Printf("%v — exiting (one daemon at a time: two Codec2 encoders crash this phone)", err)
 		os.Exit(0)
 	}
-	_ = lock // held for the process lifetime
+	lockFile = lock // held for the process lifetime
 }
