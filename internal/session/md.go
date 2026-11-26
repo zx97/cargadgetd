@@ -1987,9 +1987,21 @@ func (m *MD) OpenEveryListedChannel() {
 	for id := range m.openedCh {
 		opened[id] = true
 	}
+	// Channels we speak are opened by their own function, some of them later
+	// (audio after the focus grant). Opening one here as well sent a second
+	// ChannelOpenRequest for the same id — the bench unit answered it twice
+	// (`2 rx ch=4 msg=0x0008`), and a unit that treats a repeated open as an
+	// error would lose the channel it is about to use.
+	managed := map[uint8]bool{
+		m.VideoCh:     true,
+		m.InputCh:     true,
+		m.AudioCh:     true,
+		m.SensorCh:    true,
+		m.BluetoothCh: true,
+	}
 	m.mu.Unlock()
 	for _, id := range ids {
-		if id == 0 || opened[id] {
+		if id == 0 || opened[id] || managed[id] {
 			continue
 		}
 		body := []byte{0x08, 0x00, 0x10, byte(id)}
