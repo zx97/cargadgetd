@@ -185,8 +185,15 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 		// A head unit that dials us does it within a couple of seconds of the
 		// link coming up; waiting 30s costs the whole wireless window of units
 		// that regenerate their SSID (the lab unit drops out of AA mode after
-		// about a minute).
-		waitFor := 2 * time.Second
+		// about a minute). Six seconds: the VW MIB3 does page us, but its page
+		// takes longer than two (2026-11-26, the car said "connecting" while
+		// this side had already given up and started paging it back).
+		waitFor := 6 * time.Second
+		if v := os.Getenv("CARGADGETD_PROFILE_WAIT_MS"); v != "" {
+			if ms, perr := strconv.Atoi(v); perr == nil && ms >= 0 {
+				waitFor = time.Duration(ms) * time.Millisecond
+			}
+		}
 		if opt.Passive {
 			waitFor = 5 * time.Minute
 		}
@@ -207,7 +214,10 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 				st.Set("Android Auto profile", false, "no incoming connection (passive mode)")
 				return nil, fmt.Errorf("passive: no incoming connection after %s", sinceText(t))
 			}
-			st.Set("Android Auto profile", false, "no incoming connection, trying as client")
+			// The profile is published; what failed is the car coming to us.
+			// Saying "not published" here made the bench look broken while the
+			// phone was in fact ready and the car had simply not dialled yet.
+			st.Set("Android Auto profile", true, "published; no incoming connection, trying as client")
 			opt.logf("profile: no incoming connection after %s, falling back to client", sinceText(t))
 			st.Step("The car does not come: we call it")
 		case <-ctx.Done():
