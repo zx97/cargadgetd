@@ -466,14 +466,23 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 		if ids := shell.Load(ui, pluginDirs); len(ids) > 0 {
 			log.Printf("shell: loading %s", strings.Join(ids, ", "))
 			go func() {
+				// Start the apps only once their plugins have finished loading.
+				// StartApps used to be called straight after Load, while this
+				// goroutine was still waiting: startOne skips an app whose
+				// runner is not there yet, and nothing starts it again, so the
+				// shell came up with "No apps" — a home screen with no tiles
+				// and no way to reach them, which is exactly what the bench
+				// unit displayed while the video itself ran fine.
 				if ui.WaitLoad(2 * time.Minute) {
 					log.Printf("shell apps ready: %s", strings.Join(ui.AppIDs(), ", "))
+				} else {
+					log.Printf("shell: apps not ready after 2m, starting what loaded")
 				}
+				ui.StartApps()
 			}()
 		} else {
 			log.Printf("shell: no libcargadgetd_app_<id>.so in %v", pluginDirs)
 		}
-		ui.StartApps()
 		ui.StartGPS(conf.GPS.Backend)
 		ui.WatchNotifications()
 		defer ui.Close()
