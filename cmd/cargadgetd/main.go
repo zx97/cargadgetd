@@ -501,6 +501,22 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 			}
 		}
 
+		// The vendor encoder is created before any shell plugin is dlopen'ed.
+		// On the VW the process died inside Codec2 while the plugins were still
+		// coming up (2026-11-26 09:19): the create is the fragile call, so it
+		// happens first, on its own, exactly like the start-up warm-up that
+		// always succeeds. The painter is attached below, once the shell exists.
+		live, err := livevid.New(livevid.Options{
+			Width: vw, Height: vh, FPS: int(time.Second / framePeriod), Bitrate: 400,
+			TargetBps: conf.Video.BitrateKbps * 1000,
+			Encoder:   conf.Video.Encoder,
+		})
+		if err != nil {
+			log.Printf("livevid: %v", err)
+			return
+		}
+		defer live.Close()
+
 		ui := shell.New(cw, ch, sampleRate, pcmChannels)
 		ui.SetFramePeriod(framePeriod)
 		ui.SetDropFrames(conf.Shell.DropFrames)
@@ -698,18 +714,8 @@ func runSession(md *session.MD, autoAV, usbPace bool, onReady func()) {
 		if !ui.WaitLoad(2 * time.Minute) {
 			log.Printf("shell: plugin load timed out; opening encoder anyway")
 		}
-		live, err := livevid.New(livevid.Options{
-			Width: vw, Height: vh, FPS: fps, Bitrate: 400,
-			// video.bitrate_kbps pins the CBR rate; 0 keeps the frame budget.
-			TargetBps: conf.Video.BitrateKbps * 1000,
-			Paint:     paint, Encoder: conf.Video.Encoder,
-		})
-		if err != nil {
-			log.Printf("livevid: %v", err)
-			return
-		}
+		live.SetPaint(paint)
 		log.Printf("video: CBR target %.1f Mbps (video.bitrate_kbps=%d)", float64(live.Bitrate())/1e6, conf.Video.BitrateKbps)
-		defer live.Close()
 		log.Printf("live video: %dx%d ui=%dx%d pad=%d,%d @ %dfps encoder=%s cbr=%d (encode every frame)", vw, vh, cw, ch, ox, oy, fps, live.EncoderName(), live.Bitrate())
 
 		var ts uint64
