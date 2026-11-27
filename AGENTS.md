@@ -145,11 +145,13 @@ instructions in `~/.config/opencode/AGENTS.md`.
   `LimitCore=0` drop-in for `pulseaudio.service`, `prlimit --core=0` applied to the
   running daemon, and `~/bin/core-guard.sh` under a user timer (`core-guard.timer`)
   that deletes all but the two newest cores once free space drops below 1 GiB.
-  **`/cores` is bind-mounted onto the SD card** (29 GB): `cores-on-sd.service`
-  mounts the card by UUID at `/sdcard` and binds `/sdcard/cores` over `/cores`,
-  so `core_pattern` needs no change and a core can never eat the root
-  filesystem again. If the card is missing, the unit exits silently and the
-  guard above still applies.
+  **`/cores` is bind-mounted onto `/home/defaultuser/.cores`** (ext4, 218 GB):
+  `cores-on-home.service` does the bind, so `core_pattern` needs no change and a
+  core can never eat the root filesystem. The SD card was tried first and is
+  wrong: FAT32 cannot store a file owner, the kernel aborts the dump
+  (`cannot preserve file owner`) and leaves a 0-byte file — which is exactly how
+  the connmand core of 2026-11-28 00:13 was lost. Verified after the change: a
+  deliberate SIGSEGV writes a 442 KB core owned by `defaultuser`.
 
 - `defaultuser@10.0.1.18`, deploy dir `~/cargadgetd-deploy`, binary
   `~/cargadgetd-deploy/bin/cargadgetd-md`, launcher `wireless-toggle.sh`,
