@@ -140,6 +140,11 @@ instructions in `~/.config/opencode/AGENTS.md`.
   `defaultuser` and `/cores` is `drwxrwxrwt`, so `rm -f /cores/core.*` works
   without root. Check `df -h /` (9.5 GB total) and `du -x -h -d1 /` when anything
   behaves oddly; `/home` is a separate 218 GB LUKS volume, always roomy.
+  On 2026-11-27 eight **pulseaudio** cores (1.4 GB, 898 MB, 886 MB, …) took the
+  root filesystem to 100% again. Three defences are on the phone now: a
+  `LimitCore=0` drop-in for `pulseaudio.service`, `prlimit --core=0` applied to the
+  running daemon, and `~/bin/core-guard.sh` under a user timer (`core-guard.timer`)
+  that deletes all but the two newest cores once free space drops below 1 GiB.
 
 - `defaultuser@10.0.1.18`, deploy dir `~/cargadgetd-deploy`, binary
   `~/cargadgetd-deploy/bin/cargadgetd-md`, launcher `wireless-toggle.sh`,
