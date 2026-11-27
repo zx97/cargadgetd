@@ -27,13 +27,18 @@ func applyNetPolicy(mode, iface string, logf func(string, ...any)) {
 		return
 	}
 	out, err := exec.Command(bin, "-net-policy", mode, "-net-iface", iface).CombinedOutput()
-	msg := strings.TrimSpace(string(out))
 	if err != nil {
-		logf("route: helper -net-policy %s failed: %v (%s)", mode, err, lastLine(msg))
-		return
+		logf("route: helper -net-policy %s failed: %v", mode, err)
 	}
-	if msg != "" {
-		logf("route: %s", lastLine(msg))
+	// Every line, in order: the helper prints the banner of its own start-up too,
+	// and keeping only the last one threw away the verdict (the journal showed
+	// "route: accessory name: …" instead of what the policy did).
+	for _, line := range strings.Split(string(out), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.Contains(line, "accessory name:") {
+			continue
+		}
+		logf("route: %s", line)
 	}
 }
 
