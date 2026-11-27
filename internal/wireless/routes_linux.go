@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
+
+	"github.com/godbus/dbus/v5"
 )
 
 // Route policy while projecting.
@@ -16,18 +19,35 @@ import (
 // Auto on a real phone keeps the cellular default and only routes the car's
 // subnet over Wi-Fi; this is the same thing by hand.
 //
-// ApplyCarRoutes must not cut the projection: the car's own subnet stays on the
-// interface (the DHCP link route), only the default route is removed.
+// The order matters: ConnMan usually drops the cellular context when Wi-Fi
+// becomes the default service, so removing the Wi-Fi default first would leave
+// the phone with no default at all (measured 2026-11-28: "no internet on the
+// Jolla" while mobile data was enabled). A replacement default is looked for —
+// and asked for — before the access point's is removed.
 func ApplyCarRoutes(iface string, logf func(string, ...any)) error {
 	if iface == "" {
 		return fmt.Errorf("route policy: no interface")
 	}
 	gw := gatewayOf(iface)
 	if gw == "" {
-		// No gateway on this interface: nothing to remove, and the subnet route
-		// is already there.
 		return nil
 	}
+
+	if !hasOtherDefault(iface) {
+		logf("route: no default beyond %s, asking ConnMan for the mobile connection", iface)
+		connectCellular(logf)
+		deadline := time.Now().Add(8 * time.Second)
+		for !hasOtherDefault(iface) && time.Now().Before(deadline) {
+			time.Sleep(500 * time.Millisecond)
+		}
+		if !hasOtherDefault(iface) {
+			// Keep the projection working: its subnet stays reachable through
+			// the access point, and the user is told why the internet is out.
+			logf("route: still no default after asking for mobile data — leaving the access point's default in place")
+			return nil
+		}
+	}
+
 	removed := 0
 	for _, spec := range [][]string{
 		{"route", "del", "default", "via", gw, "dev", iface},
@@ -41,7 +61,10 @@ func ApplyCarRoutes(iface string, logf func(string, ...any)) error {
 		}
 		removed++
 	}
-	logf("route: removed %d default route(s) via %s (%s), the projection keeps its subnet", removed, gw, iface)
+	if removed > 0 {
+		logf("route: removed %d default route(s) via %s (%s); internet stays on %s",
+			removed, gw, iface, otherDefaultDev(iface))
+	}
 	return nil
 }
 
@@ -66,6 +89,70 @@ func RestoreCarRoutes(iface string, logf func(string, ...any)) error {
 	return nil
 }
 
+// hasOtherDefault reports whether a default route exists on another interface.
+func hasOtherDefault(iface string) bool { return otherDefaultDev(iface) != "" }
+
+// otherDefaultDev returns the interface of a default route that is not iface.
+func otherDefaultDev(iface string) string {
+	out, err := runIP("route", "show", "default")
+	if err != nil {
+		return ""
+	}
+	for _, d := range parseDefaultDevs(out) {
+		if d != iface {
+			return d
+		}
+	}
+	return ""
+}
+
+// parseDefaultDevs lists the interface of every default route in `ip route show
+// default` output. Split out because it is the one part of the policy that can
+// be checked without touching a live routing table.
+func parseDefaultDevs(out string) []string {
+	var devs []string
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(strings.TrimSpace(line))
+		if len(f) < 2 || f[0] != "default" {
+			continue
+		}
+		for i := 0; i+1 < len(f); i++ {
+			if f[i] == "dev" {
+				devs = append(devs, f[i+1])
+				break
+			}
+		}
+	}
+	return devs
+}
+
+// connectCellular asks ConnMan to bring the mobile connection back: Wi-Fi being
+// the default service is what made ConnMan drop it.
+func connectCellular(logf func(string, ...any)) {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return
+	}
+	services, err := connmanServices()
+	if err != nil {
+		return
+	}
+	for _, s := range services {
+		if s.Type != "cellular" {
+			continue
+		}
+		if s.State == "online" || s.State == "ready" {
+			logf("route: cellular %q is already %s", s.Name, s.State)
+			continue
+		}
+		if err := conn.Object(connmanService, s.Path).Call("net.connman.Service.Connect", 0).Err; err != nil {
+			logf("route: cellular %q connect: %v", s.Name, err)
+			continue
+		}
+		logf("route: asked ConnMan to connect cellular %q (was %s)", s.Name, s.State)
+	}
+}
+
 // gatewayOf returns the IPv4 gateway the interface got from DHCP, or "".
 func gatewayOf(iface string) string {
 	out, err := runIP("route", "show", "dev", iface)
@@ -81,6 +168,7 @@ func gatewayOf(iface string) string {
 	return ""
 }
 
+// runIP runs iproute2 and returns its output.
 func runIP(args ...string) (string, error) {
 	bin := "/usr/sbin/ip"
 	if _, err := exec.LookPath(bin); err != nil {
