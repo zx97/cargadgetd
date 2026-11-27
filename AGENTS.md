@@ -145,7 +145,7 @@ instructions in `~/.config/opencode/AGENTS.md`.
   `LimitCore=0` drop-in for `pulseaudio.service`, `prlimit --core=0` applied to the
   running daemon, and `~/bin/core-guard.sh` under a user timer (`core-guard.timer`)
   that deletes all but the two newest cores once free space drops below 1 GiB.
-  **`/cores` is bind-mounted onto `/home/defaultuser/.cores`** (ext4, 218 GB):
+  **`/cores` is bind-mounted onto `/home/defaultuser/cores`** (ext4, 218 GB):
   `cores-on-home.service` does the bind, so `core_pattern` needs no change and a
   core can never eat the root filesystem. The SD card was tried first and is
   wrong: FAT32 cannot store a file owner, the kernel aborts the dump
