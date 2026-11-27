@@ -47,6 +47,7 @@ func main() {
 	certDirFlag := flag.String("certs", "", "reversegearhead.so path (default: daemon.certs)")
 	configPath := flag.String("config", "", "YAML config file (default: search path after compiled defaults)")
 	autoAV := flag.Bool("auto-av", true, "open AV channels and stream livevid after SDR")
+	warmVideo := flag.Bool("warm-video", true, "create the hardware encoder once at start-up, before any car connects")
 	wirelessFlag := flag.Bool("wireless", false, "connect to a paired head unit over Bluetooth/Wi-Fi instead of USB")
 	dialFlag := flag.String("dial", "", "dial a head unit's AAP endpoint directly (tcp://host:port), no Bluetooth pairing needed")
 	wirelessName := flag.String("wireless-name", "", "paired head unit Bluetooth name (default: the paired device advertising the Android Auto UUID)")
@@ -89,6 +90,18 @@ func main() {
 	controlAddr := pick(*controlFlag, conf0.Daemon.Control)
 	certDir := pick(*certDirFlag, conf0.Daemon.Certs)
 	log.Printf("cargadgetd %s (%s) config=%s transport=%s listen=%s", version, commit, cfg.LoadedFrom(), conf0.Daemon.Transport, listen)
+
+	// Prove the vendor encoder before a car is attached (see warm.go).
+	if *warmVideo && conf0.Video.Live {
+		w, h := 1280, 720
+		if s := conf0.Video.Size; s != "" && s != "auto" {
+			var ww, hh int
+			if _, err := fmt.Sscanf(s, "%dx%d", &ww, &hh); err == nil && ww > 0 && hh > 0 {
+				w, h = ww, hh
+			}
+		}
+		go warmEncoder(w, h, 30, conf0.Video.BitrateKbps, conf0.Video.Encoder)
+	}
 
 	mat, err := rgh.Open(certDir)
 	if err != nil {

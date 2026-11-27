@@ -521,12 +521,19 @@ func newDroid(w, h, fps, bps int) (codec, error) {
 }
 
 func newDroidIn(w, h, fps, bps int) (codec, error) {
+	// Checkpoints around every step of the vendor encoder's start-up. On the VW
+	// the process died inside Codec2 without a single line of ours to say which
+	// call it was in (2026-11-26 09:19): the last checkpoint written in the car
+	// will name it.
+	log.Printf("livevid: droid_load…")
 	if err := C.droid_load(); err != nil {
 		return nil, fmt.Errorf("dlopen: %s", C.GoString(err))
 	}
+	log.Printf("livevid: droid_load ok")
 	if C.droid_supported() == 0 {
 		return nil, fmt.Errorf("no video/avc encoder")
 	}
+	log.Printf("livevid: encoder supported")
 	var fmts [16]C.uint32_t
 	n := int(C.droid_fmts(&fmts[0], 16))
 	color, layout := pickDroidColor(fmts[:n])
@@ -538,6 +545,7 @@ func newDroidIn(w, h, fps, bps int) (codec, error) {
 		bps = minBps
 	}
 	cbps := C.int(bps)
+	log.Printf("livevid: droid_open %dx%d color=0x%x (create_encoder)…", w, h, color)
 	c := C.droid_open(C.int(w), C.int(h), C.int(fps), cbps, C.int(color), 1, 1)
 	if c == nil {
 		c = C.droid_open(C.int(w), C.int(h), C.int(fps), cbps, C.int(color), 1, 0)
