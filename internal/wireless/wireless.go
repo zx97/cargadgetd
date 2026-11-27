@@ -555,7 +555,12 @@ waitLoop:
 			if ssidSeen.IsZero() {
 				ssidSeen = time.Now()
 			}
-			if endpoint != "" || time.Since(ssidSeen) > 3*time.Second {
+			// Wait for the endpoint even after the credentials. The VW MIB3
+			// sends it a couple of seconds later than the SSID (2026-11-26:
+			// id=1 with port 49150 arrived 2.96 s after our info request), and
+			// its port is dynamic, so the fixed-port fallback can never work:
+			// leaving early guarantees a failed dial.
+			if endpoint != "" || time.Since(ssidSeen) > 8*time.Second {
 				opt.logf("wpp: leaving the RFCOMM loop after %s (endpoint=%q ssid=%q)", sinceText(start), endpoint, ssid)
 				break waitLoop
 			}
