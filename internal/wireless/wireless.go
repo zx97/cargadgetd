@@ -114,8 +114,8 @@ func Dial(ctx context.Context, opt Options) (conn net.Conn, err error) {
 	}
 	st.Setf("Bluetooth paired", dev.Connected, "%s %s — %s", dev.Name, dev.Address, linkState)
 	for i, c := range devices {
-		opt.logf("bluetooth: candidate %d/%d %s addr=%s trusted=%v connected=%v adapter=%s uuids=%v",
-			i+1, len(devices), c.Name, c.Address, c.Trusted, c.Connected, c.Adapter, c.UUIDs)
+		opt.logf("bluetooth: candidate %d/%d %s addr=%s class=0x%06x trusted=%v connected=%v adapter=%s uuids=%v",
+			i+1, len(devices), c.Name, c.Address, c.Class, c.Trusted, c.Connected, c.Adapter, c.UUIDs)
 	}
 	// A carplay_* network the phone rejoined on its own is a leftover: the head
 	// unit is not in a session with us, and that AP has no route.

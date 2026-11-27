@@ -41,10 +41,12 @@ type Device struct {
 	Class uint32
 }
 
-// IsPhone reports whether this device is a phone (class major 0x02). Those are
-// never dialled before a head unit.
-func (d *Device) IsPhone() bool {
-	return (d.Class>>8)&0x1f == 0x02
+// LooksLikeHeadUnit reports whether the class of device says audio/video —
+// which is what a car kit is (0x200404 hands-free, 0x240404 car audio). A PC is
+// major 0x01, a phone 0x02: neither is ever the car, and dialling them wastes
+// the real unit's window.
+func (d *Device) LooksLikeHeadUnit() bool {
+	return (d.Class>>8)&0x1f == 0x04
 }
 
 // FindDevice returns the paired device matching address (exact) or name
@@ -163,10 +165,11 @@ func FindDevices(name, address string) ([]*Device, error) {
 // the one that could not answer).
 func orderCandidates(ds []*Device) {
 	sort.SliceStable(ds, func(i, j int) bool {
-		// A phone is never the car, whatever its connection state: the user's
-		// own handset answers the AA probe and stole candidate 1.
-		if pi, pj := ds[i].IsPhone(), ds[j].IsPhone(); pi != pj {
-			return !pi
+		// Only an audio/video device can be the car, whatever its connection
+		// state: the user's PC and his own handset both answered the AA probe
+		// and stole candidate 1 (measured 2026-11-26 and 27).
+		if hi, hj := ds[i].LooksLikeHeadUnit(), ds[j].LooksLikeHeadUnit(); hi != hj {
+			return hi
 		}
 		if ds[i].Connected != ds[j].Connected {
 			return ds[i].Connected
