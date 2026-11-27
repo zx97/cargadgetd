@@ -712,6 +712,10 @@ waitLoop:
 		st.Set("Car Wi-Fi", false, err.Error())
 		return nil, err
 	}
+	// From here the car's subnet is the only thing that may use this interface:
+	// its access point has no internet, and leaving its default route in place
+	// cut the phone off from everything else (navigation included).
+	applyCarRoutes(opt.Interface, opt.logf)
 	if endpoint == "" {
 		gw := defaultGateway(opt.Interface)
 		if gw == "" {

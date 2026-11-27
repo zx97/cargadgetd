@@ -372,6 +372,9 @@ func RestoreHomeWiFi(logf func(string, ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	// The session is over: give the access point's default route back before
+	// forgetting it, so the phone is exactly as it was before we touched it.
+	restoreCarRoutes(logf)
 	ForgetHeadUnitAPs(logf)
 	resumeAutoConnect(logf)
 
