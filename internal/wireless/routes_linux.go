@@ -4,6 +4,7 @@ package wireless
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 	"time"
@@ -65,7 +66,24 @@ func ApplyCarRoutes(iface string, logf func(string, ...any)) error {
 		logf("route: removed %d default route(s) via %s (%s); internet stays on %s",
 			removed, gw, iface, otherDefaultDev(iface))
 	}
+	probeInternet(logf)
 	return nil
+}
+
+// probeInternet says, in the log, whether the phone can actually reach the
+// outside world while projecting. It dials an address, not a name: a DNS
+// failure and a routing failure look identical from the car's screen, and the
+// journal has to tell them apart.
+func probeInternet(logf func(string, ...any)) {
+	for _, target := range []string{"1.1.1.1:443", "8.8.8.8:53"} {
+		c, err := net.DialTimeout("tcp", target, 2*time.Second)
+		if err == nil {
+			c.Close()
+			logf("route: internet reachable (%s)", target)
+			return
+		}
+		logf("route: internet unreachable (%s): %v", target, err)
+	}
 }
 
 // RestoreCarRoutes puts back the default route the access point's DHCP asked
