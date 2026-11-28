@@ -510,6 +510,7 @@ func runSession(md *session.MD, usbPace bool) {
 		log.Printf("live video: %dx%d ui=%dx%d pad=%d,%d @ %dfps encoder=%s cbr=%d (encode every frame)", vw, vh, cw, ch, ox, oy, fps, live.EncoderName(), live.Bitrate())
 
 		var ts uint64
+		codecSent := false
 		videoStarted := false
 		streaming := true
 		nextFrame := time.Now()
@@ -622,6 +623,19 @@ func runSession(md *session.MD, usbPace bool) {
 				}
 			}
 			au, err := live.Encode(now)
+			if err == nil && len(au) > 0 && !codecSent {
+				// The parameter sets go out as CODEC_CONFIG before the first
+				// frame: a head unit that waits for that message never learns
+				// the picture size and acks a stream it does not display.
+				if cc := live.CodecConfig(); len(cc) > 0 {
+					if err := md.SendVideoCodecConfig(cc); err != nil {
+						log.Printf("video CODEC_CONFIG: %v", err)
+					} else {
+						codecSent = true
+						log.Printf("video CODEC_CONFIG sent (%dB)", len(cc))
+					}
+				}
+			}
 			if err != nil || len(au) == 0 {
 				if usbPace {
 					md.ReleaseVideoCredit()

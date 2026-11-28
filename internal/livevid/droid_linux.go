@@ -793,6 +793,17 @@ func pickDroidColor(fmts []C.uint32_t) (color int, layout int) {
 	return int(fmts[0]), yuvNV12
 }
 
+// CodecConfig returns the SPS/PPS the encoder reported, Annex-B, ready to be
+// sent as a CODEC_CONFIG message.
+func (e *droidEnc) CodecConfig() []byte {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.cfg) == 0 {
+		return nil
+	}
+	return append([]byte(nil), e.cfg...)
+}
+
 func (e *droidEnc) Name() string {
 	if e.name != "" {
 		return e.name

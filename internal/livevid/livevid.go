@@ -126,6 +126,25 @@ func (r *Renderer) Close() error {
 	return err
 }
 
+// CodecConfig returns the H.264 parameter sets (SPS/PPS, Annex-B) the encoder
+// produced, or nil when the codec keeps them to itself.
+//
+// The official phone sends them as their own CODEC_CONFIG message instead of
+// relying on them being in-band: a head unit that reads that message and gets
+// nothing never learns the picture size and acks frames it never displays.
+func (r *Renderer) CodecConfig() []byte {
+	r.mu.Lock()
+	enc := r.enc
+	r.mu.Unlock()
+	if enc == nil {
+		return nil
+	}
+	if c, ok := enc.(interface{ CodecConfig() []byte }); ok {
+		return c.CodecConfig()
+	}
+	return nil
+}
+
 // ForceIDR makes the next Encode start a fresh IDR (reopens the encoder).
 func (r *Renderer) ForceIDR() {
 	r.mu.Lock()

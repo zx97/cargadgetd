@@ -51,8 +51,11 @@ const (
 
 // Media / input (channel-specific).
 const (
+	// 0x0000 carries an 8-byte timestamp then the payload; 0x0001 carries
+	// parameter sets only. "MediaIndication" was a wrong name for 0x0001, and a
+	// frame sent with it reached the head unit as if it were SPS/PPS.
 	MediaWithTimestamp = 0x0000
-	MediaIndication    = 0x0001
+	MediaCodecConfig   = 0x0001
 	MediaSetupRequest  = 0x8000
 	MediaStartInd      = 0x8001
 	MediaStopInd       = 0x8002
@@ -2116,15 +2119,24 @@ func (m *MD) SendH264Credit(tsMicros uint64, annexB []byte) (bypassed bool, err 
 	return false, err
 }
 
+// SendVideoCodecConfig sends the H.264 parameter sets as their own CODEC_CONFIG
+// message, which is what the official phone does instead of leaving them in-band
+// only. A head unit that waits for this message acks every frame and shows
+// nothing, because it never learns the picture size.
+func (m *MD) SendVideoCodecConfig(annexB []byte) error {
+	if len(annexB) == 0 {
+		return nil
+	}
+	p := frame.PutU16(nil, MediaCodecConfig)
+	p = append(p, annexB...)
+	return m.enqueueTimeout(m.VideoCh, frame.FlagBulk|frame.FlagEncrypted, p, 3*time.Second)
+}
+
 // SendH264Reserved enqueues a video AU after ReserveVideoCredit.
 func (m *MD) SendH264Reserved(tsMicros uint64, annexB []byte) error {
-	var p []byte
-	if tsMicros == 0 {
-		p = frame.PutU16(nil, MediaIndication)
-	} else {
-		p = frame.PutU16(nil, MediaWithTimestamp)
-		p = frame.PutU64(p, tsMicros)
-	}
+	// Always DATA (0x0000), timestamp included even when zero.
+	p := frame.PutU16(nil, MediaWithTimestamp)
+	p = frame.PutU64(p, tsMicros)
 	p = append(p, annexB...)
 	timeout := 3 * time.Second
 	if m.usbBulk {
