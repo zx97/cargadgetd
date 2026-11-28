@@ -63,10 +63,6 @@ func main() {
 	certInfo := flag.Bool("cert-info", false, "print the certificate probe and exit")
 	certsFetch := flag.Bool("certs-fetch", false, "download the Android Auto APK, extract the real MD certificate pair, and exit")
 	flag.Parse()
-	// One daemon at a time: two encoders (wireless projecting + USB on a
-	// charger) crash Codec2 on this phone.
-	claimSingleInstance()
-
 	// Millisecond timestamps: the wireless log is read to compare phase
 	// durations, and whole seconds hide the interesting gaps.
 	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
@@ -117,7 +113,7 @@ func main() {
 		}
 		log.Printf("no extracted Android Auto pair (%v); using %s", err, mat.Path)
 	}
-	log.Printf("using reversegearhead MD certs from %s (%d + %d bytes) expires_in=%ds",
+	log.Printf("using MD certs from %s (%d + %d bytes) expires_in=%ds",
 		mat.Path, len(mat.Cert), len(mat.Key), mat.ExpiresIn)
 	if *certsFetch {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -133,6 +129,11 @@ func main() {
 		log.Printf("certs-fetch: %s (expires_in=%ds)\n%s", mat.Path, mat.ExpiresIn, mat.Probe)
 		return
 	}
+	// One daemon at a time: two encoders (wireless projecting + USB on a
+	// charger) crash Codec2 on this phone. Claimed after the commands that
+	// only read the certificate and exit.
+	claimSingleInstance()
+
 	if *certInfo {
 		if mat.Probe != "" {
 			fmt.Print(mat.Probe)

@@ -1,7 +1,11 @@
 // Package rgh loads GAL MD TLS material from reversegearhead.so.
 package rgh
 
-import "strings"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
 
 // ConfigDefault is where aaextract keeps the pair it pulls out of the Android
 // Auto APK, one subdirectory per version. It is the preferred source: an
@@ -22,15 +26,34 @@ type Material struct {
 	ExpiresIn int64
 }
 
-// ResolvePath maps daemon.certs / -certs to a reversegearhead.so path.
-// Empty, "embedded", and "reversegearhead" mean DefaultSO (old release default).
+// ResolvePath maps daemon.certs / -certs to a path, and expands a leading "~"
+// to the user's home. Without the expansion the extracted pair landed in a
+// directory literally named "~" inside the working directory (measured on the
+// phone: cargadgetd-deploy/bin/~/.local/share/cargadgetd/certs/…).
+//
+// Empty, "embedded", and "reversegearhead" mean DefaultSO (the plugin).
 func ResolvePath(certs string) string {
 	s := strings.TrimSpace(certs)
 	switch strings.ToLower(s) {
 	case "", "embedded", "reversegearhead":
 		return DefaultSO
 	}
-	return s
+	return expandUser(s)
+}
+
+// expandUser resolves a leading "~" or "~/" to the current user's home.
+func expandUser(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == "~" {
+		return home
+	}
+	return filepath.Join(home, p[2:])
 }
 
 func missingErr(path string) error {
