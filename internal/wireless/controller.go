@@ -26,6 +26,38 @@ type Controller struct {
 	conn    net.Conn
 	// attempts counts connection cycles since start, for the log.
 	attempts int
+	// idle throttles the "what are we waiting for" line between cycles.
+	idle idleVoice
+}
+
+// idleVoice writes the waiting sentence at most every 30 s, and immediately
+// when it changes. A retry cycle runs every few seconds, so without this a car
+// parked overnight would write the same line thousands of times and bury the
+// session that does start.
+type idleVoice struct {
+	mu   sync.Mutex
+	last time.Time
+	text string
+}
+
+func (v *idleVoice) say(text string, logf func(string, ...any)) {
+	if text == "" || logf == nil {
+		return
+	}
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if text == v.text && time.Since(v.last) < 30*time.Second {
+		return
+	}
+	v.text, v.last = text, time.Now()
+	logf("waiting: %s", text)
+}
+
+// reset forgets the last sentence, so the next wait says it again at once.
+func (v *idleVoice) reset() {
+	v.mu.Lock()
+	v.text = ""
+	v.mu.Unlock()
 }
 
 // NewController builds a controller and wires the status into Options.
@@ -106,10 +138,12 @@ func (c *Controller) Run(ctx context.Context) {
 		// while it is in its AA screen: retry almost immediately instead of
 		// waiting fifteen seconds and missing it.
 		const maxWait = 3 * time.Second
-		if reason := WaitForChange(ctx, c.Opt, maxWait, c.Opt.logf); reason != "" {
+		reason, waiting := WaitForChange(ctx, c.Opt, maxWait, c.Opt.logf)
+		if reason != "" {
+			c.idle.reset()
 			c.logf("attempt #%d: situation changed (%s), starting a new cycle now", c.attempts, reason)
 		} else {
-			c.logf("attempt #%d: retrying after %s", c.attempts, maxWait)
+			c.idle.say(waiting, c.Opt.logf)
 		}
 		if ctx.Err() != nil {
 			return

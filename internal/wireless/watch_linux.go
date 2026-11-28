@@ -63,15 +63,21 @@ func watchSnapshot(devPath dbus.ObjectPath, iface, ssid string) watchState {
 // or until max elapses. It is what keeps the connection cycle alive: the daemon
 // never gives up; it restarts as soon as something moves (car switched on, AP
 // visible, link connected) and otherwise retries after max.
-func WaitForChange(ctx context.Context, opt Options, max time.Duration, logf func(string, ...any)) string {
+//
+// The second result describes what is being waited for, in one sentence. The
+// cycle calls this every few seconds, so the caller throttles that sentence:
+// "still waiting" is worth reading once every half minute, and a car parked
+// overnight would otherwise write it thousands of times.
+func WaitForChange(ctx context.Context, opt Options, max time.Duration, logf func(string, ...any)) (reason, waiting string) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
 	dev, err := FindDevice(opt.Name, opt.Address)
 	if err != nil {
-		logf("watch: no paired device to watch (%v), retrying after %s", err, max)
+		// Nothing to watch. This is the one state worth saying plainly: an
+		// unpaired phone never connects, whatever the daemon does.
 		sleepCtx(ctx, max)
-		return ""
+		return "", fmt.Sprintf("no paired Bluetooth device (%v) — pair the phone from the car's Bluetooth menu", err)
 	}
 	ssid := opt.SSID
 	if ssid == "" {
@@ -79,21 +85,52 @@ func WaitForChange(ctx context.Context, opt Options, max time.Duration, logf fun
 	}
 	prev := watchSnapshot(dev.Path, opt.Interface, ssid)
 	logf("watch: watching %s and %q (state=%+v) for up to %s", dev.Address, ssid, prev, max)
+	label := peerLabel(dev)
 	start := time.Now()
 	for time.Since(start) < max {
 		select {
 		case <-ctx.Done():
-			return ""
+			return "", ""
 		case <-time.After(2 * time.Second):
 		}
 		cur := watchSnapshot(dev.Path, opt.Interface, ssid)
 		if reason := cur.diff(prev, ssid); reason != "" {
 			logf("watch: change detected (%s) after %s", reason, sinceText(start))
-			return reason
+			return reason, ""
 		}
+		prev = cur
 	}
-	logf("watch: nothing changed in %s (state=%+v)", max, prev)
-	return ""
+	return "", waitDesc(label, ssid, prev)
+}
+
+// peerLabel names a device the way a person recognizes it: the friendly name,
+// with the address kept for the people who line up two units.
+func peerLabel(d *Device) string {
+	if d.Name == "" {
+		return d.Address
+	}
+	return fmt.Sprintf("%s (%s)", d.Name, d.Address)
+}
+
+// waitDesc says, in one sentence, what the daemon is waiting for. A car that is
+// simply switched off and one that is on but never opens its access point look
+// identical in a retry line; this is the difference.
+func waitDesc(label, ssid string, st watchState) string {
+	link := "Bluetooth link down"
+	switch {
+	case st.Connected && st.Services:
+		link = "Bluetooth link up, waiting for the Android Auto service"
+	case st.Connected:
+		link = "Bluetooth link up, services not resolved"
+	}
+	if ssid == "" {
+		return fmt.Sprintf("%s: %s, no access point known for it", label, link)
+	}
+	ap := st.WiFiState
+	if ap == "" {
+		ap = "not seen"
+	}
+	return fmt.Sprintf("%s: %s, access point %q %s", label, link, ssid, ap)
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) {
