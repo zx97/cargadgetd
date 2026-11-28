@@ -280,9 +280,33 @@ switched off does not stop the daemon from finding one that is on. A device is
 only reported as present once its ACL link comes up; "candidate" in the log
 means "read from the BlueZ cache", not "in range".
 
-`~/.cache/cargadgetd-headunit` (one line: Bluetooth address, or a name) pins a
-single head unit when several are around and the order is not what you want.
-Empty means discovery over all bonded devices.
+With several units paired, name the one to dial in the configuration:
+
+```yaml
+daemon:
+  peer: "AA:BB:CC:DD:EE:FF"   # exact address
+  # peer: "CAR BT"            # or a name (substring)
+  # peer: auto                # discovery (the default)
+```
+
+An address is exact: nothing is ranked, so a paired PC or another phone can
+never take the cycle. A name is a substring match, which is how a unit whose
+address changes at every boot is still named. `-wireless-addr` overrides both
+for a bench run.
+
+With `auto` (the default) the daemon orders the bonded devices itself:
+audio/video class first (only a car kit has it), then the one whose link is up,
+then the one advertising the Android Auto UUID, and a unit that just failed to
+page is demoted for two minutes.
+
+Every attempt says which device it dials and why:
+
+```
+wireless: peer from daemon.peer address name="" addr="AA:BB:CC:DD:EE:FF" channel=7 iface=wlan0
+```
+
+An earlier release documented a `~/.cache/cargadgetd-headunit` pin file here.
+It was never implemented; `daemon.peer` replaces it.
 
 ### A deleted log is recreated
 

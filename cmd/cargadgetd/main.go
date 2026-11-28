@@ -257,8 +257,12 @@ func main() {
 	}
 
 	if *wirelessFlag {
-		log.Printf("wireless: Bluetooth name=%q addr=%q channel=%d iface=%s",
-			*wirelessName, *wirelessAddr, *wirelessChannel, *wirelessIface)
+		// Which head unit to dial, and why. An explicit address (flag or
+		// daemon.peer) is exact; "auto" leaves the choice to the candidate
+		// ordering, which is only as good as its heuristics.
+		peer := wireless.ResolvePeer(*wirelessName, *wirelessAddr, cfg.Get().Daemon.Peer)
+		log.Printf("wireless: peer from %s name=%q addr=%q channel=%d iface=%s",
+			peer.Why, peer.Name, peer.Addr, *wirelessChannel, *wirelessIface)
 		st := wireless.NewStatus()
 		st.SetNames(btName, usbName)
 		// The "Record Bluetooth" button: the monitor channel needs root, so the
@@ -288,8 +292,8 @@ func main() {
 			st.SetStatic("MD certificate", true, fmt.Sprintf("valide (%ds)", mat.ExpiresIn))
 		}
 		ctl := wireless.NewController(wireless.Options{
-			Name:      *wirelessName,
-			Address:   *wirelessAddr,
+			Name:      peer.Name,
+			Address:   peer.Addr,
 			Channel:   uint8(*wirelessChannel),
 			Interface: *wirelessIface,
 			SSID:      *wirelessSSID,

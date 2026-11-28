@@ -48,6 +48,14 @@ type Daemon struct {
 	Control string
 	// Certs is reversegearhead.so (GAL MD PEMs). "embedded" still maps to the default plugin.
 	Certs string
+	// Peer is the head unit to dial on the wireless path: a Bluetooth address
+	// (exact), a device name (substring), or "auto" to let the daemon pick from
+	// the paired devices. Empty means auto.
+	//
+	// Two contracts, and the explicit one is the default: with an address here
+	// nothing is guessed, so a paired phone or PC can never take the cycle. The
+	// ordering heuristics in internal/wireless only run for "auto".
+	Peer string
 }
 
 type Video struct {

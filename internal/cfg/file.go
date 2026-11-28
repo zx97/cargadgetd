@@ -25,6 +25,7 @@ type fileDaemon struct {
 	Listen    *string `yaml:"listen"`
 	Control   *string `yaml:"control"`
 	Certs     *string `yaml:"certs"`
+	Peer      *string `yaml:"peer"`
 }
 
 type fileVideo struct {
@@ -102,6 +103,9 @@ func (f fileConfig) merge(dst *Config) {
 		}
 		if d.Certs != nil {
 			dst.Daemon.Certs = *d.Certs
+		}
+		if d.Peer != nil {
+			dst.Daemon.Peer = strings.TrimSpace(*d.Peer)
 		}
 	}
 	if f.Video != nil {
@@ -226,6 +230,7 @@ type outDaemon struct {
 	Listen    string `yaml:"listen"`
 	Control   string `yaml:"control"`
 	Certs     string `yaml:"certs"`
+	Peer      string `yaml:"peer"`
 }
 
 type outVideo struct {
@@ -282,6 +287,7 @@ func encodeYAML(c *Config) ([]byte, error) {
 			Listen:    c.Daemon.Listen,
 			Control:   c.Daemon.Control,
 			Certs:     c.Daemon.Certs,
+			Peer:      c.Daemon.Peer,
 		},
 		Video: outVideo{
 			Encoder:     c.Video.Encoder,

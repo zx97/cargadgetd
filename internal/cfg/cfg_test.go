@@ -312,3 +312,42 @@ func TestExpandPath(t *testing.T) {
 		t.Fatalf("tilde: %q", got)
 	}
 }
+
+// daemon.peer selects the head unit: an address is exact, "auto" keeps the
+// discovery heuristics. It must survive a load and a save, or a settings menu
+// that writes it would silently lose the choice.
+func TestDaemonPeerRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "peer.yaml")
+	if err := os.WriteFile(p, []byte("daemon:\n  peer: \" AA:BB:CC:DD:EE:FF \"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	c := Default()
+	if err := applyFile(c, p); err != nil {
+		t.Fatal(err)
+	}
+	if c.Daemon.Peer != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("peer = %q, want the trimmed address", c.Daemon.Peer)
+	}
+	b, err := encodeYAML(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c2 := Default()
+	if err := applyFile(c2, writeTemp(t, dir, "back.yaml", b)); err != nil {
+		t.Fatal(err)
+	}
+	if c2.Daemon.Peer != "AA:BB:CC:DD:EE:FF" {
+		t.Fatalf("peer lost in the round trip: %q\n%s", c2.Daemon.Peer, b)
+	}
+}
+
+// writeTemp drops b in dir under name and returns the path.
+func writeTemp(t *testing.T, dir, name string, b []byte) string {
+	t.Helper()
+	p := filepath.Join(dir, name)
+	if err := os.WriteFile(p, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
