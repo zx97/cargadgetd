@@ -145,6 +145,14 @@ func (r *Renderer) CodecConfig() []byte {
 	return nil
 }
 
+// SetPaint replaces the frame painter. The painter captures the shell and its
+// session, so it changes with every session while the encoder can stay.
+func (r *Renderer) SetPaint(f func(*image.RGBA, time.Time)) {
+	r.mu.Lock()
+	r.paint = f
+	r.mu.Unlock()
+}
+
 // ForceIDR makes the next Encode start a fresh IDR (reopens the encoder).
 func (r *Renderer) ForceIDR() {
 	r.mu.Lock()

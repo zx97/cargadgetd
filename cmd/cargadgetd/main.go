@@ -309,6 +309,20 @@ func runSession(md *session.MD, usbPace bool) {
 			}
 		}
 
+		// The vendor encoder is created before any shell plugin is dlopen'ed.
+		// On a 2014 unit the process died inside Codec2 right after the plugins
+		// came up: the create is the fragile call, so it happens first, on its
+		// own. The painter is attached below, once the shell exists.
+		live, err := livevid.New(livevid.Options{
+			Width: vw, Height: vh, FPS: int(time.Second / framePeriod), Bitrate: 400,
+			Encoder: conf.Video.Encoder,
+		})
+		if err != nil {
+			log.Printf("livevid: %v", err)
+			return
+		}
+		defer live.Close()
+
 		ui := shell.New(cw, ch, sampleRate, pcmChannels)
 		ui.SetFramePeriod(framePeriod)
 		ui.SetDropFrames(conf.Shell.DropFrames)
@@ -506,11 +520,7 @@ func runSession(md *session.MD, usbPace bool) {
 		if !ui.WaitLoad(2 * time.Minute) {
 			log.Printf("shell: plugin load timed out; opening encoder anyway")
 		}
-		live, err := livevid.New(livevid.Options{Width: vw, Height: vh, FPS: fps, Bitrate: 400, Paint: paint, Encoder: conf.Video.Encoder})
-		if err != nil {
-			log.Printf("livevid: %v", err)
-			return
-		}
+		live.SetPaint(paint)
 		defer live.Close()
 		log.Printf("live video: %dx%d ui=%dx%d pad=%d,%d @ %dfps encoder=%s cbr=%d (encode every frame)", vw, vh, cw, ch, ox, oy, fps, live.EncoderName(), live.Bitrate())
 
