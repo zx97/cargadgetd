@@ -1,7 +1,6 @@
 package wireless
 
 import (
-	"sort"
 	"sync"
 	"time"
 )
@@ -36,29 +35,18 @@ func NotePresent(addr string) {
 	absentMu.Unlock()
 }
 
-// demoteAbsent moves recently silent devices to the end, keeping the order
-// inside each group.
-func demoteAbsent(ds []*Device) {
-	now := time.Now()
+// absentNow reports whether addr recently failed to answer, clearing a mark
+// that has expired. Ordering uses it as one sort key: see orderCandidates.
+func absentNow(addr string) bool {
 	absentMu.Lock()
-	isAbsent := func(d *Device) bool {
-		t, ok := absentTill[d.Address]
-		if ok && now.After(t) {
-			delete(absentTill, d.Address)
-			return false
-		}
-		return ok
+	defer absentMu.Unlock()
+	t, ok := absentTill[addr]
+	if !ok {
+		return false
 	}
-	present := make([]*Device, 0, len(ds))
-	var absent []*Device
-	for _, d := range ds {
-		if isAbsent(d) {
-			absent = append(absent, d)
-		} else {
-			present = append(present, d)
-		}
+	if time.Now().After(t) {
+		delete(absentTill, addr)
+		return false
 	}
-	absentMu.Unlock()
-	sort.SliceStable(absent, func(i, j int) bool { return false })
-	copy(ds, append(present, absent...))
+	return true
 }

@@ -151,7 +151,6 @@ func FindDevices(name, address string) ([]*Device, error) {
 			name, address, strings.Join(seen, ", "))
 	}
 	orderCandidates(picked)
-	demoteAbsent(picked)
 	return picked, nil
 }
 
@@ -164,12 +163,25 @@ func FindDevices(name, address string) ([]*Device, error) {
 // while the lab unit was connected=true at candidate 2, and the attempt went to
 // the one that could not answer).
 func orderCandidates(ds []*Device) {
+	// absent is read once: a comparator may not mutate the shared map, and the
+	// map is small (a handful of paired devices).
+	absent := make(map[string]bool, len(ds))
+	for _, d := range ds {
+		absent[d.Address] = absentNow(d.Address)
+	}
 	sort.SliceStable(ds, func(i, j int) bool {
 		// Only an audio/video device can be the car, whatever its connection
 		// state: the user's PC and his own handset both answered the AA probe
-		// and stole candidate 1 (measured 2026-11-26 and 27).
+		// and stole candidate 1 (measured 2026-11-26 and 27). The rule has to
+		// dominate the "recently silent" flag too: a head unit that is switched
+		// off still belongs in front of a PC that happens to be connected, and
+		// applying the demotion afterwards put that PC first on the bench
+		// (measured 2026-11-28).
 		if hi, hj := ds[i].LooksLikeHeadUnit(), ds[j].LooksLikeHeadUnit(); hi != hj {
 			return hi
+		}
+		if absent[ds[i].Address] != absent[ds[j].Address] {
+			return !absent[ds[i].Address]
 		}
 		if ds[i].Connected != ds[j].Connected {
 			return ds[i].Connected
