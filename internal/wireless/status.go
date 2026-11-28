@@ -66,6 +66,12 @@ type Snapshot struct {
 	// the page language, so the page script needs no text of its own.
 	USBSvc, USBMode, USBSess          string
 	USBSvcCls, USBModeCls, USBSessCls string
+	// Hero and Chips are the first screen: what the driver must read first, and
+	// three live facts (Bluetooth, Wi-Fi, session) as touch targets. Built in
+	// Localize from a reading of the system taken with the snapshot.
+	Hero  Hero
+	Chips []Chip
+	live  rawLive
 }
 
 // Status is the live state of the wireless bootstrap. All methods are safe on a
@@ -321,6 +327,9 @@ func (s *Status) Snapshot() Snapshot {
 	// Sampling the USB unit forks systemctl and reads /proc: do it outside the
 	// lock, and never let it delay the wireless state.
 	snap.USB = USBStatus()
+	// Bluetooth and Wi-Fi are sampled here so the first screen reflects the
+	// system now, not the last attempt.
+	snap.live = readLive()
 	snap.Localize("en")
 	return snap
 }
@@ -349,6 +358,8 @@ func (s *Snapshot) Localize(lang string) {
 	s.Banner, s.BannerCls = bannerFor(lang, *s)
 	s.PhaseLine = phaseLine(lang, *s)
 	s.Next, s.NextKind = nextStep(lang, *s)
+	// First screen, from the live reading taken with this snapshot.
+	s.heroChips(lang)
 	for i := range s.Checks {
 		c := &s.Checks[i]
 		c.Name = T(lang, c.Name)

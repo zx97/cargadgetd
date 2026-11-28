@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"log"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // Handler serves the wireless status page and its start/stop controls.
@@ -70,6 +72,17 @@ func (s *Status) Handler(start, stop func(), joinWiFi func() error, restart func
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		fmt.Fprintf(w, `<meta http-equiv="refresh" content="3;url=/"><p>%s</p>`, html.EscapeString(msg))
+	})
+
+	mux.HandleFunc("/bt-debug", func(w http.ResponseWriter, r *http.Request) {
+		lang := DetectLang(r)
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		snap, err := PowerBT(log.Printf)
+		s.setBTDebug(renderBTDebug(lang, snap, err))
+		http.Redirect(w, r, "/#bluetooth", http.StatusSeeOther)
 	})
 
 	mux.HandleFunc("/usb-fix", func(w http.ResponseWriter, r *http.Request) {
@@ -256,11 +269,40 @@ button{flex:1;padding:14px;font-size:1rem;border-radius:10px;border:0;color:#fff
 pre{background:#0b0d11;border:1px solid #2a2f3a;border-radius:8px;padding:10px;overflow:auto;font-size:.78rem;white-space:pre-wrap;word-break:break-word}
 #p-log pre{height:62vh;min-height:260px;overflow:auto;-webkit-overflow-scrolling:touch}
 #wpp{height:46vh;min-height:200px}
+
+/* First screen: verdict, live chips, big buttons. Touch first: nothing under
+   44px tall, colour always doubled by a word. */
+.hero{display:flex;gap:14px;align-items:center;padding:18px;border-radius:16px;margin:10px 0 14px;border:1px solid #2a2f3a;background:#0f1620}
+.hero.ok{background:#0f2418;border-color:#2ecc71}
+.hero.ko{background:#2a1414;border-color:#e74c3c}
+.hero.wait{background:#231d0d;border-color:#f1c40f}
+.hero .hdot{width:22px;height:22px;border-radius:50%;flex:0 0 22px;background:#7f8c8d}
+.hero.ok .hdot{background:#2ecc71}.hero.ko .hdot{background:#e74c3c}.hero.wait .hdot{background:#f1c40f}
+.hero h2{margin:0;font-size:1.35rem;line-height:1.25}
+.hero p{margin:6px 0 0;font-size:1rem;color:#c7cdd6}
+.chips{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 14px}
+.chipform{flex:1 1 30%;margin:0}
+.chip{display:block;width:100%;padding:14px 10px;border-radius:14px;border:1px solid #2a2f3a;background:#0f1620;color:#e7e9ee;font-size:.95rem;text-align:left;min-height:52px}
+.chip.ok{border-color:#2ecc71}.chip.ko{border-color:#e74c3c}.chip.wait{border-color:#f1c40f}
+.actions{display:flex;gap:8px;margin:0 0 16px}
+.actions form{margin:0;display:flex}
+.actions button{width:100%;padding:18px 10px;font-size:1.05rem;font-weight:700;border-radius:14px;border:0;color:#fff}
+.go{background:#2ecc71}.relaunch{background:#8e44ad}.halt{background:#e74c3c}
+.debug{margin:10px 0 16px;padding:12px;border-radius:12px;background:#0b0d11;border:1px solid #2a2f3a}
+.debug .dtitle{font-weight:700;margin-bottom:8px}
+.debug .drow{font-size:.9rem;margin:4px 0;color:#c7cdd6}
+.debug .dbad{color:#e74c3c;margin:6px 0}
+.debug .dim{color:#7f8c8d}
 </style></head><body>`)
 	fmt.Fprintf(&b, "<h1>%s</h1>", html.EscapeString(T(lang, "Cargadgetd Wireless")))
 
 	banner, cls := snap.Banner, snap.BannerCls
 	fmt.Fprintf(&b, `<div id="banner" class="banner %s">%s</div>`, cls, html.EscapeString(banner))
+
+	// Live state, read from the system on this very request: the workflow below
+	// is the journal of the last attempt, and on its own it kept showing
+	// "Bluetooth link ✓" long after the adapter had been switched off.
+	b.WriteString(liveBlockHTML(lang, snap))
 
 	fmt.Fprintf(&b, `<div id="next" class="next %s"><div class="t">%s</div><div id="nextText">%s</div></div>`,
 		html.EscapeString(snap.NextKind), html.EscapeString(T(lang, "What to do")), html.EscapeString(snap.Next))
@@ -398,6 +440,16 @@ async function tick(){
   try { s = JSON.parse(txt); } catch(e) { return; }
   const b=$('banner');
   if(b){ b.textContent=s.Banner||''; b.className='banner '+(s.BannerCls||'idle'); }
+  const h=$('hero');
+  if(h){
+    h.className='hero '+((s.Hero&&s.Hero.Kind)||'wait');
+    const t=$('heroTitle'); if(t) t.textContent=(s.Hero&&s.Hero.Title)||'';
+    const hh=$('heroHint'); if(hh) hh.textContent=(s.Hero&&s.Hero.Hint)||'';
+  }
+  (s.Chips||[]).forEach((c,i)=>{
+    const el=$('chip'+i);
+    if(el){ el.className='chip '+(c.Kind||'wait'); el.textContent=c.Text||''; }
+  });
   const p=$('phase');
   if(p){ p.textContent=s.PhaseLine||''; }
   const nx=$('next');
@@ -479,3 +531,86 @@ const wireUSBFix = `<script>
   });
 })();
 </script>`
+
+// liveBlockHTML is the first screen: one verdict, three live facts, three big
+// buttons. Everything is translated here; the page script only swaps texts it
+// receives from /status, so it stays language-free.
+func liveBlockHTML(lang string, snap Snapshot) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, `<section class="hero %s" id="hero"><span class="hdot"></span><div class="htx"><h2 id="heroTitle">%s</h2><p id="heroHint">%s</p></div></section>`,
+		html.EscapeString(snap.Hero.Kind), html.EscapeString(snap.Hero.Title), html.EscapeString(snap.Hero.Hint))
+
+	b.WriteString(`<div class="chips" id="chips">`)
+	for i, c := range snap.Chips {
+		if c.Action != "" {
+			fmt.Fprintf(&b, `<form method="post" action="%s" class="chipform"><button type="submit" class="chip %s" id="chip%d">%s</button></form>`,
+				html.EscapeString(c.Action), html.EscapeString(c.Kind), i, html.EscapeString(c.Text))
+			continue
+		}
+		fmt.Fprintf(&b, `<div class="chip %s" id="chip%d">%s</div>`, html.EscapeString(c.Kind), i, html.EscapeString(c.Text))
+	}
+	b.WriteString(`</div>`)
+
+	b.WriteString(`<div class="actions">
+<form method="post" action="/start" style="flex:2"><button class="go" type="submit">` + T(lang, "Connect") + `</button></form>
+<form method="post" action="/restart" style="flex:1"><button class="relaunch" type="submit">` + T(lang, "Restart") + `</button></form>
+<form method="post" action="/stop" style="flex:1"><button class="halt" type="submit">` + T(lang, "Stop") + `</button></form>
+</div>`)
+
+	if dbg := debugHTML(); dbg != "" {
+		b.WriteString(dbg)
+	}
+	return b.String()
+}
+
+// renderBTDebug is what the Bluetooth chip returns: the adapter as BlueZ sees
+// it, and the devices with the class that decides who gets dialled.
+func renderBTDebug(lang string, snap BTSnapshot, err error) string {
+	var b strings.Builder
+	b.WriteString(`<div class="debug" id="btdebug">`)
+	fmt.Fprintf(&b, `<div class="dtitle">%s</div>`, html.EscapeString(T(lang, "Bluetooth, as BlueZ reports it")))
+	if err != nil {
+		fmt.Fprintf(&b, `<div class="dbad">%s</div>`, html.EscapeString(err.Error()))
+	}
+	state := T(lang, "off")
+	if snap.Powered {
+		state = T(lang, "on")
+	}
+	adapter := snap.Adapter
+	if adapter == "" {
+		adapter = T(lang, "none")
+	}
+	fmt.Fprintf(&b, `<div class="drow">%s</div>`, html.EscapeString(TF(lang, "Adapter: %s (%s)", adapter, state)))
+	if snap.Err != "" {
+		fmt.Fprintf(&b, `<div class="dbad">%s</div>`, html.EscapeString(snap.Err))
+	}
+	if len(snap.Devices) == 0 {
+		fmt.Fprintf(&b, `<div class="drow">%s</div>`, html.EscapeString(T(lang, "No device known")))
+	}
+	for _, d := range snap.Devices {
+		fmt.Fprintf(&b, `<div class="drow">• %s</div>`, html.EscapeString(DeviceLabel(lang, d)))
+	}
+	fmt.Fprintf(&b, `<div class="drow dim">%s</div>`, html.EscapeString(T(lang, "Touch the Bluetooth chip to switch the adapter on and read it again.")))
+	b.WriteString(`</div>`)
+	return b.String()
+}
+
+// btDebugHTML is the last Bluetooth diagnostic, kept until the next one. A
+// package variable rather than a Status field: it belongs to the page, not to
+// the bootstrap state machine.
+var btDebug struct {
+	sync.Mutex
+	html string
+}
+
+func (s *Status) setBTDebug(h string) {
+	btDebug.Lock()
+	btDebug.html = h
+	btDebug.Unlock()
+}
+
+func debugHTML() string {
+	btDebug.Lock()
+	defer btDebug.Unlock()
+	return btDebug.html
+}
