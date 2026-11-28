@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"github.com/cargadgetd/cargadgetd/internal/aaextract"
 	"image"
 	"image/color"
 	"image/draw"
@@ -59,7 +60,8 @@ func main() {
 	wirelessPassive := flag.Bool("wireless-passive", false, "wait for the head unit to connect to our AA profile; never page or probe")
 	logFile := flag.String("log-file", "", "log to this file, reopening it if it is deleted or rotated")
 	showVersion := flag.Bool("version", false, "print version and exit")
-	certInfo := flag.Bool("cert-info", false, "print reversegearhead_probe and exit")
+	certInfo := flag.Bool("cert-info", false, "print the certificate probe and exit")
+	certsFetch := flag.Bool("certs-fetch", false, "download the Android Auto APK, extract the real MD certificate pair, and exit")
 	flag.Parse()
 	// One daemon at a time: two encoders (wireless projecting + USB on a
 	// charger) crash Codec2 on this phone.
@@ -103,12 +105,34 @@ func main() {
 		go warmEncoder(w, h, 30, conf0.Video.BitrateKbps, conf0.Video.Encoder)
 	}
 
-	mat, err := rgh.Open(certDir)
+	// The real Google pair, extracted from the Android Auto APK, wins when it
+	// is present: it is the certificate the head units actually trust, and it
+	// can be refreshed when Google rotates it. The -certs plugin stays as the
+	// offline fallback and for a bench that pins a known-good pair.
+	mat, err := aaextract.Open(rgh.ConfigDefault)
 	if err != nil {
-		log.Fatalf("certs: %v", err)
+		mat, err = rgh.Open(certDir)
+		if err != nil {
+			log.Fatalf("certs: %v", err)
+		}
+		log.Printf("no extracted Android Auto pair (%v); using %s", err, mat.Path)
 	}
 	log.Printf("using reversegearhead MD certs from %s (%d + %d bytes) expires_in=%ds",
 		mat.Path, len(mat.Cert), len(mat.Key), mat.ExpiresIn)
+	if *certsFetch {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		dir, err := aaextract.InstallDownload(ctx, rgh.ConfigDefault)
+		if err != nil {
+			log.Fatalf("certs-fetch: %v", err)
+		}
+		mat, err := aaextract.Open(rgh.ConfigDefault)
+		if err != nil {
+			log.Fatalf("certs-fetch: installed in %s but will not load: %v", dir, err)
+		}
+		log.Printf("certs-fetch: %s (expires_in=%ds)\n%s", mat.Path, mat.ExpiresIn, mat.Probe)
+		return
+	}
 	if *certInfo {
 		if mat.Probe != "" {
 			fmt.Print(mat.Probe)

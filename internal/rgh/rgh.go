@@ -3,6 +3,12 @@ package rgh
 
 import "strings"
 
+// ConfigDefault is where aaextract keeps the pair it pulls out of the Android
+// Auto APK, one subdirectory per version. It is the preferred source: an
+// extracted pair is the real one Google ships, while a plugin pins whatever was
+// built into it (and expires).
+const ConfigDefault = "~/.local/share/cargadgetd/certs"
+
 // DefaultSO is the plugin that exports reversegearhead_android_auto_crt/key.
 const DefaultSO = "/usr/lib/cargadgetd/plugins/reversegearhead.so"
 

@@ -78,6 +78,11 @@ import (
 // The handle is never closed (Go c-shared runtime stays loaded; the shell
 // later dlopens the same path as an app).
 func Open(path string) (*Material, error) {
+	// An extracted Android Auto pair is a directory of PEMs, not a plugin: the
+	// same function serves both so callers do not care which source they have.
+	if isDir(path) && looksLikePair(path) {
+		return openDir(path)
+	}
 	path = ResolvePath(path)
 	st, err := os.Stat(path)
 	if err != nil {
