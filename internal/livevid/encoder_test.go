@@ -43,3 +43,23 @@ func TestStepBitrate(t *testing.T) {
 		t.Fatalf("cap: %d", stepUp(4_000_000, 4_800_000))
 	}
 }
+
+// The open rate is what a car actually receives. The two paths differ by more
+// than 3x, and only the first one has ever been run on a head unit.
+func TestOpenRate(t *testing.T) {
+	cases := []struct {
+		name string
+		o    Options
+		want int
+	}{
+		{"validated 1500 kbps", Options{Width: 1280, Height: 720, FPS: 30, TargetBps: 1500 * 1000}, 1_500_000},
+		{"frame budget (0)", Options{Width: 1280, Height: 720, FPS: 30}, 4_800_000},
+		{"below the floor is raised", Options{Width: 1280, Height: 720, FPS: 30, TargetBps: 100 * 1000}, minBps},
+		{"above the ceiling is clamped", Options{Width: 1280, Height: 720, FPS: 30, TargetBps: 20_000_000}, 6_000_000},
+	}
+	for _, c := range cases {
+		if got := openRate(c.o); got != c.want {
+			t.Errorf("%s: openRate = %d, want %d", c.name, got, c.want)
+		}
+	}
+}

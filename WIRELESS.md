@@ -343,10 +343,19 @@ a second, so only a dead car trips it.
 
 ## Video bitrate
 
-`video.bitrate_kbps` pins the CBR target. `0` keeps the frame-size budget
-(about 4.8 Mbps at 30 fps, keyframes around 450 KB). A head unit whose decoder
-reboots under a heavy stream needs a lower rate; `1500` is the project's own
-"crisp" floor and cuts the keyframe bursts to roughly a third.
+`video.bitrate_kbps` pins the CBR target and defaults to **1500**, which is the
+only rate ever run end to end here: all 24 recorded sessions on the two bench
+units opened at 1.5 Mbps and none needed the adaptive step-down. It keeps text
+and map lines crisp and cuts the keyframe bursts that stress a car decoder.
+
+`bitrate_kbps: 0` asks for the frame-size budget instead: ~20 KB per frame,
+about 4.8 Mbps at 30 fps, keyframes near 100 KB. That is the rate a VW MIB3
+disliked — its decoder rebooted under a heavy stream over USB — and it has never
+been run on a real unit since, so it is an explicit choice, not a default.
+
+The adaptive path is bounded by the open rate: `stepUp` never exceeds it, and
+`stepDown` stops at `crispFloor` (1.5 Mbps). Opening at 1500 therefore pins the
+session at 1500 — which is what the two units have been validated with.
 
 The bitrate does **not** follow the resolution: `hwBitrate` ignores width and
 height on purpose, because a bitrate that shrinks with a smaller picture makes

@@ -351,3 +351,29 @@ func writeTemp(t *testing.T, dir, name string, b []byte) string {
 	}
 	return p
 }
+
+// 1500 kbps is the only rate ever run end to end on the bench units; the
+// frame-size budget (~4.8 Mbps) is the rate that rebooted a car decoder, so it
+// must be an explicit choice. 0 in the file still means it.
+func TestDefaultBitrateIsTheValidatedOne(t *testing.T) {
+	if got := Default().Video.BitrateKbps; got != 1500 {
+		t.Fatalf("default bitrate = %d, want 1500", got)
+	}
+	dir := t.TempDir()
+	explicitZero := writeTemp(t, dir, "zero.yaml", []byte("video:\n  bitrate_kbps: 0\n"))
+	c := Default()
+	if err := applyFile(c, explicitZero); err != nil {
+		t.Fatal(err)
+	}
+	if c.Video.BitrateKbps != 0 {
+		t.Fatalf("explicit bitrate_kbps: 0 became %d", c.Video.BitrateKbps)
+	}
+	other := writeTemp(t, dir, "high.yaml", []byte("video:\n  bitrate_kbps: 3000\n"))
+	c = Default()
+	if err := applyFile(c, other); err != nil {
+		t.Fatal(err)
+	}
+	if c.Video.BitrateKbps != 3000 {
+		t.Fatalf("explicit bitrate_kbps: 3000 became %d", c.Video.BitrateKbps)
+	}
+}

@@ -69,10 +69,16 @@ type Video struct {
 	FrameMs int
 	// Live enables the live RGBA encoder. false skips the encode loop.
 	Live bool
-	// BitrateKbps is the CBR target. 0 follows the frame-size budget (about
-	// 4.8 Mbps at 30fps). Some head units reboot or drop the session under a
-	// heavy stream, so the rate is a user setting: 1500 kbps keeps text and map
-	// lines crisp and cuts the keyframe bursts that stress a car decoder.
+	// BitrateKbps is the CBR target. 1500 is the default because it is the only
+	// rate ever run end to end: all 24 recorded sessions on the two bench units
+	// (a 2014 universal unit and a VW MIB3) opened at 1.5 Mbps, and the MIB3 is
+	// the unit whose decoder rebooted under a heavy stream over USB. It keeps
+	// text and map lines crisp and cuts the keyframe bursts that stress a car
+	// decoder.
+	//
+	// 0 means the frame-size budget instead (about 4.8 Mbps at 30fps, keyframes
+	// near 100 KB). That value has never been run on a real head unit here: it
+	// is the rate the MIB3 is known to dislike, so ask for it explicitly.
 	BitrateKbps int
 }
 
@@ -152,7 +158,7 @@ func Default() *Config {
 			ConfigIndex: -1,
 			FrameMs:     33,
 			Live:        true,
-			BitrateKbps: 0,
+			BitrateKbps: 1500,
 		},
 		Audio: Audio{
 			Enabled:     true,

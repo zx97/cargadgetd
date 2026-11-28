@@ -91,10 +91,7 @@ func New(opts Options) (*Renderer, error) {
 	if opts.Height <= 0 {
 		opts.Height = DefaultHeight
 	}
-	bps := hwBitrate(opts.Width, opts.Height, opts.FPS, opts.Bitrate)
-	if opts.TargetBps > 0 {
-		bps = clampBps(opts.TargetBps)
-	}
+	bps := openRate(opts)
 	r := &Renderer{
 		rgba:    image.NewRGBA(image.Rect(0, 0, opts.Width, opts.Height)),
 		w:       opts.Width,
@@ -316,6 +313,20 @@ func (r *Renderer) CodecConfig() []byte {
 		return c.CodecConfig()
 	}
 	return nil
+}
+
+// openRate is the CBR target the encoder is opened with, and the ceiling the
+// adaptive up-step may return to. An explicit TargetBps wins (clamped); without
+// one the frame-size budget applies (about 4.8 Mbps at 30fps).
+//
+// The two are very different streams on purpose: 1500 kbps is what the bench
+// units have actually been run at, and the frame budget is what made a VW MIB3
+// decoder reboot under a heavy stream.
+func openRate(o Options) int {
+	if o.TargetBps > 0 {
+		return clampBps(o.TargetBps)
+	}
+	return hwBitrate(o.Width, o.Height, o.FPS, o.Bitrate)
 }
 
 // Bitrate returns the live CBR target.

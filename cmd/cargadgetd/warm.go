@@ -27,13 +27,14 @@ func warmEncoder(w, h, fps, kbps int, encoder string) {
 		encoder = "droidmedia"
 	}
 	start := time.Now()
-	r, err := livevid.New(livevid.Options{
-		Width:   w,
-		Height:  h,
-		FPS:     fps,
-		Bitrate: kbps,
-		Encoder: encoder,
-	})
+	opts := livevid.Options{Width: w, Height: h, FPS: fps, Encoder: encoder}
+	if kbps > 0 {
+		// Same target as the session, not the frame-size budget: the warm-up
+		// exists to prove the configuration that will actually run, and the two
+		// rates differ by more than 3x (1500 kbps vs ~4.8 Mbps).
+		opts.TargetBps = kbps * 1000
+	}
+	r, err := livevid.New(opts)
 	if err != nil {
 		log.Printf("video warm-up: %v (the session will try again)", err)
 		return
