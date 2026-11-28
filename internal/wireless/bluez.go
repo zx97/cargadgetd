@@ -169,6 +169,7 @@ func orderCandidates(ds []*Device) {
 	for _, d := range ds {
 		absent[d.Address] = absentNow(d.Address)
 	}
+	good := LastGood()
 	sort.SliceStable(ds, func(i, j int) bool {
 		// Only an audio/video device can be the car, whatever its connection
 		// state: the user's PC and his own handset both answered the AA probe
@@ -179,6 +180,13 @@ func orderCandidates(ds []*Device) {
 		// (measured 2026-11-28).
 		if hi, hj := ds[i].LooksLikeHeadUnit(), ds[j].LooksLikeHeadUnit(); hi != hj {
 			return hi
+		}
+		// The unit that carried the last session goes first, before the
+		// "recently silent" flag: an expired mark would otherwise send the next
+		// cycle back to the unit in the car park (11.7s of page timeout on the
+		// bench) while the unit in front waits.
+		if gi, gj := ds[i].Address == good, ds[j].Address == good; gi != gj {
+			return gi
 		}
 		if absent[ds[i].Address] != absent[ds[j].Address] {
 			return !absent[ds[i].Address]
@@ -273,6 +281,49 @@ func AdapterSetup(adapter dbus.ObjectPath) error {
 	return nil
 }
 
+// adapterReady reports whether the adapter already has every property
+// AdapterSetup would write, and does so without needing root.
+//
+// The zero timeouts matter: BlueZ reverts Discoverable after
+// DiscoverableTimeout, which would silently make the phone disappear from the
+// head unit's pairing list.
+func adapterReady(adapter dbus.ObjectPath) (bool, string) {
+	conn, err := dbus.SystemBus()
+	if err != nil {
+		return false, ""
+	}
+	props, err := adapterProps(conn, adapter)
+	if err != nil {
+		return false, ""
+	}
+	powered, discoverable, pairable := variantBool(props["Powered"]), variantBool(props["Discoverable"]), variantBool(props["Pairable"])
+	if !powered || !discoverable || !pairable {
+		return false, ""
+	}
+	if variantUint32(props["DiscoverableTimeout"]) != 0 || variantUint32(props["PairableTimeout"]) != 0 {
+		return false, ""
+	}
+	return true, fmt.Sprintf("powered=%v discoverable=%v pairable=%v timeouts=0", powered, discoverable, pairable)
+}
+
+// adapterProps reads org.bluez.Adapter1 with a bound, so a wedged BlueZ cannot
+// freeze the cycle.
+func adapterProps(conn *dbus.Conn, adapter dbus.ObjectPath) (map[string]dbus.Variant, error) {
+	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var props map[string]dbus.Variant
+	err := conn.Object(bluezService, adapter).
+		CallWithContext(cctx, "org.freedesktop.DBus.Properties.GetAll", 0, "org.bluez.Adapter1").
+		Store(&props)
+	return props, err
+}
+
+// variantUint32 reads a uint32 property, zero when absent or another type.
+func variantUint32(v dbus.Variant) uint32 {
+	n, _ := v.Value().(uint32)
+	return n
+}
+
 // dbusErrText names the D-Bus error when its body is empty (Sailfish answers
 // AuthFailed with no message), so the log line stays useful.
 func dbusErrText(err error) string {
@@ -305,6 +356,14 @@ func (d *Device) EnsureAdapter(logf func(string, ...any)) {
 		logf("bluetooth: adapter path unknown")
 		return
 	}
+	// Read before writing: the setup writes need root, and the daemon pays for
+	// the refused D-Bus call plus the setuid helper on every attempt (2.4s
+	// measured). Once the adapter is powered and forever-discoverable there is
+	// nothing to do.
+	if ok, why := adapterReady(d.Adapter); ok {
+		logf("bluetooth: adapter already configured (%s)", why)
+		return
+	}
 	if err := AdapterSetup(d.Adapter); err != nil {
 		logf("bluetooth: adapter direct: %v", err)
 		if bin := cfg.Get().Gadget.Bin; bin != "" {
@@ -326,10 +385,7 @@ func (d *Device) EnsureAdapter(logf func(string, ...any)) {
 		logf("bluetooth: adapter: %v", err)
 		return
 	}
-	var props map[string]dbus.Variant
-	if err := conn.Object(bluezService, d.Adapter).
-		Call("org.freedesktop.DBus.Properties.GetAll", 0, "org.bluez.Adapter1").
-		Store(&props); err == nil {
+	if props, err := adapterProps(conn, d.Adapter); err == nil {
 		logf("bluetooth: adapter address=%s powered=%v discoverable=%v pairable=%v discovering=%v",
 			variantString(props["Address"]),
 			variantBool(props["Powered"]),

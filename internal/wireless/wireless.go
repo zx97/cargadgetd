@@ -380,6 +380,10 @@ func dialCandidate(ctx context.Context, cand *Device, opt Options, st *Status, g
 		return nil, human
 	}
 	NotePresent(cand.Address)
+	// Learned, not configured: the next cycle starts with the unit that just
+	// answered, which is what keeps the common case fast (the bench spent 41.6s
+	// per connection, 11.7 of them paging a unit that was switched off).
+	NoteGood(cand.Address)
 	st.Setf("RFCOMM", true, "channel %d", channel)
 	st.Phase("wpp")
 	if fc, ok := rc.(*fileConn); ok {

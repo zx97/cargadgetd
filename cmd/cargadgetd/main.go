@@ -289,7 +289,7 @@ func main() {
 		if mat.ExpiresIn < 0 {
 			st.SetStatic("MD certificate", false, fmt.Sprintf("expired (expires_in=%ds)", mat.ExpiresIn))
 		} else {
-			st.SetStatic("MD certificate", true, fmt.Sprintf("valide (%ds)", mat.ExpiresIn))
+			st.SetStatic("MD certificate", true, fmt.Sprintf("valid (%ds)", mat.ExpiresIn))
 		}
 		ctl := wireless.NewController(wireless.Options{
 			Name:      peer.Name,
