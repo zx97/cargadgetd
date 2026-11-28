@@ -348,6 +348,45 @@ a second, so only a dead car trips it.
 reboots under a heavy stream needs a lower rate; `1500` is the project's own
 "crisp" floor and cuts the keyframe bursts to roughly a third.
 
+The bitrate does **not** follow the resolution: `hwBitrate` ignores width and
+height on purpose, because a bitrate that shrinks with a smaller picture makes
+frames mushy for no gain. The consequence is worth knowing before raising
+`video.size`: the same ~4.8 Mbps spread over 1920×1080 is 0.077 bits per pixel
+instead of 0.174 at 1280×720, so the bigger mode is a *softer* picture unless
+the rate is raised too, and `clampBps` stops at 6 Mbps. Matching 720p's
+bits-per-pixel at 1080p would need about 10.8 Mbps, which the encoder is not
+given.
+
+### Resolution: `auto` is not always the small mode
+
+`video.size: auto` follows the head unit in this order: an exact codec match for
+the touch-screen size, then a content-rectangle match, then **`video_configs[0]`
+as a last resort**. That last step assumes index 0 is a sensible default. On a
+VW MIB3 it is not: the unit advertises
+
+```
+0:1920x1080 m=559x468 ui=1361x612   1:1280x720 m=0x144 ui=1280x576   2:800x480 ...
+```
+
+and sends `touch=unset` (`touch=0x0` in the log), so `auto` skips both match
+steps and picks **1920×1080** — 2.25× the pixels and 60% of the frame is black
+letterbox, to display a content area only 6% wider than 1280×576.
+
+Pinning the size removes the guess:
+
+```yaml
+video:
+  size: 1280x720
+```
+
+Measured on that unit: `SDR video using 1280x720 m=0x144 ui=1280x576
+pad=0,72 config_index=1 (want idx=-1 size=1280x720)`. The Melia advertises a
+single 1280×720 mode and declares `touch=1280x480`, so both values agree there.
+
+`TestAutoWithNoTouchSizeFallsBackToConfigZero` pins this behaviour: if the
+fallback ever changes, that test says so instead of a car showing a softer
+picture after an innocent refactor.
+
 ```yaml
 video:
     encoder: droidmedia
