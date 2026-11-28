@@ -112,7 +112,12 @@ func main() {
 		}
 		defer ssl.Close()
 		md := session.NewMD(rw, ssl, log.Default())
-		md.SetUSBBulk(strings.HasPrefix(listen, "ffs://"))
+		usb := strings.HasPrefix(listen, "ffs://")
+		md.SetUSBBulk(usb)
+		if !usb {
+			// Wireless links: the official phone pings once a second.
+			md.EnablePings(time.Second)
+		}
 		mdMu.md = md
 		defer func() { mdMu.md = nil }()
 		runSession(md, strings.HasPrefix(listen, "ffs://"))

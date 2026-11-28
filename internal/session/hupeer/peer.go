@@ -25,6 +25,8 @@ type Peer struct {
 	touchesSent int
 	// SkipVideoAck, when set, receives video but does not MediaAck (n-ACK stall).
 	SkipVideoAck atomic.Bool
+	// phonePings counts the PingRequests the phone sent (MD.EnablePings).
+	phonePings atomic.Int32
 
 	mu    sync.Mutex
 	sendQ chan peerOut
@@ -35,6 +37,9 @@ type peerOut struct {
 	payload        []byte
 	done           chan error
 }
+
+// PhonePings returns how many PingRequest messages the phone sent.
+func (p *Peer) PhonePings() int { return int(p.phonePings.Load()) }
 
 // Frames returns how many video and audio frames this peer has received.
 // The counters are updated by the reader goroutine, so tests must read them
@@ -179,6 +184,15 @@ func (p *Peer) Run() error {
 			msg := frame.PutU16(nil, session.MsgServiceDiscoveryResponse)
 			msg = append(msg, sdr...)
 			if err := p.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, msg); err != nil {
+				return err
+			}
+
+		case session.MsgPingRequest:
+			// The phone pings on wireless links; answer like a head unit does.
+			p.phonePings.Add(1)
+			resp := frame.PutU16(nil, session.MsgPingResponse)
+			resp = append(resp, body...)
+			if err := p.enqueue(0, frame.FlagBulk|frame.FlagEncrypted, resp); err != nil {
 				return err
 			}
 
