@@ -441,6 +441,53 @@ devel-su rpm -Uvh cargadgetd-plugin-link-*.rpm cargadgetd-plugin-maps-*.rpm
 The plugins are `.so` files in `/usr/lib/cargadgetd/plugins/`; the shell loads
 them on the next session and lists them in the app grid.
 
+### The map tile needs OSM Scout Server, and the server needs its storage registered
+
+`cargadgetd-plugin-maps` renders MapLibre and fetches everything from the local
+OSM Scout Server:
+
+```
+http://127.0.0.1:8553/v1/mbgl/style?style=%s
+http://127.0.0.1:8553/v1/mbgl/tile?style=%s&x=%d&y=%d&z=%d
+```
+
+A style request that answers `404` with `Error while getting Mapbox GL style`
+does **not** mean the maps are missing. It means the server has no storage
+registered with its Map Manager, so it cannot find the data it already has. On
+the bench the folder held 6.9 GB and every request failed for that reason.
+
+Registering it is one DBus call, and the state is persisted in the folder
+(`files.sqlite`, `countries_requested.json`), so it survives a restart of the
+service:
+
+```sh
+S=io.github.rinigus.OSMScoutServer
+M=/io/github/rinigus/OSMScoutServer/manager
+I=io.github.rinigus.OSMScoutServer.manager
+busctl --user call $S $M $I createDirectory s "$HOME/Maps.OSM"
+busctl --user call $S $M $I addCountry s "europe/belgium"
+busctl --user call $S $M $I getUpdates
+```
+
+Two more details worth knowing:
+
+- there is **no style called `default`**. The installed ones are `mc`, `mc-en`,
+  `mc-car`, `mc-car-en`, `osmbright`, `osmbright-en`, `osmbright-car` and
+  `osmbright-car-en` in `/usr/share/harbour-osmscout-server/styles/mapboxgl/styles/`;
+  the plugin asks for `osmbright`;
+- `/v1/mbgl/sprite` answers `404` even when the map renders: the sprite only
+  carries POI and shield icons, and the files are in
+  `styles/mapboxgl/sprites/`.
+
+Verify with:
+
+```sh
+curl -s -o /dev/null -w "%{http_code}\n" \
+  "http://127.0.0.1:8553/v1/mbgl/style?style=osmbright"          # 200
+curl -s -o /dev/null -w "%{http_code}\n" \
+  "http://127.0.0.1:8553/v1/mbgl/tile?style=osmbright&x=32&y=21&z=6"  # 200
+```
+
 AppSupport, microG and Aurora Store are already installed on a stock Jolla
 Phone 2026. Install Waze (and Google Maps if your AppSupport has the Play
 Services it needs) from Aurora Store, open the app on the phone, then open
